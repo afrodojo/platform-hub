@@ -36,6 +36,8 @@ jobs:
         env:
           TRIGGERED_BY: ${{ github.event.client_payload.service || 'hub-direct' }}
           SPOKE_LANG: ${{ github.event.client_payload.language || 'node' }}
+          POSTGRES_PASSWORD: ci_validation_placeholder_password
+          N8N_ENCRYPTION_KEY: ci_validation_placeholder_encryption_key_32chars
         run: |
           echo "Central Hub assembled (triggered by: $TRIGGERED_BY / $SPOKE_LANG)"
           docker compose -f docker-compose.prod.yml config -q
