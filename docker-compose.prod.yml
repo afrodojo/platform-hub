@@ -1,0 +1,159 @@
+services:
+  # 1. Edge Reverse Proxy & Automatic TLS
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - hub_internal
+
+  # 2. Shared Data & Queue Backbone (Postgres + Redis)
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hubadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-platform_hub}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hubadmin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hub_internal
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hub_internal
+
+  # 3. Visual Cross-Division Workflow Engine (n8n in Scalable Queue Mode)
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-platform_hub}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-hubadmin}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      EXECUTIONS_MODE: queue
+      QUEUE_BULL_REDIS_HOST: redis
+      QUEUE_BULL_REDIS_PORT: 6379
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Set N8N_ENCRYPTION_KEY in .env}
+      N8N_HOST: ${HUB_DOMAIN:-localhost}
+      WEBHOOK_URL: https://${HUB_DOMAIN:-localhost}/workflows/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - hub_internal
+
+  n8n-worker:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    command: worker
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-platform_hub}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-hubadmin}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      EXECUTIONS_MODE: queue
+      QUEUE_BULL_REDIS_HOST: redis
+      QUEUE_BULL_REDIS_PORT: 6379
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+    depends_on:
+      - n8n
+    networks:
+      - hub_internal
+
+  # 4. Central Client Portal & Intake Hub (HTML / TypeScript / Node)
+  hub-web:
+    image: ghcr.io/afrodojo/platform-hub:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hubadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform_hub}
+      REDIS_URL: redis://redis:6379
+      LEGAL_SERVICE_URL: http://legal-java:8080
+      CYBER_WORKER_URL: http://cyber-python:8000
+      CRYPTO_ENGINE_URL: http://core-cpp:9000
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - hub_internal
+
+  # 5. Spoke Slot A: Notary, Process Server & Compliance Engine (Java)
+  legal-java:
+    image: ghcr.io/afrodojo/${JAVA_SPOKE_REPO:-legal-notary-service}:latest
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-platform_hub}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-hubadmin}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_HOST: redis
+    depends_on:
+      - postgres
+    networks:
+      - hub_internal
+
+  # 6. Spoke Slot B: Cyber Monitoring, AI Red-Teaming & Doctoral R&D (Python)
+  cyber-python:
+    image: ghcr.io/afrodojo/${PYTHON_SPOKE_REPO:-cyber-rd-worker}:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hubadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform_hub}
+      CELERY_BROKER_URL: redis://redis:6379/1
+      STRIX_API_KEY: ${STRIX_API_KEY:-}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - hub_internal
+
+  # 7. Spoke Slot C: High-Speed Hashing, Malware Quarantine & Scanners (C / C++)
+  core-cpp:
+    image: ghcr.io/afrodojo/${CPP_SPOKE_REPO:-core-crypto-engine}:latest
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      PORT: 9000
+    networks:
+      - hub_internal
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pg_data:
+  redis_data:
+  n8n_data:
+
+networks:
+  hub_internal:
+    driver: bridge
