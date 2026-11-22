@@ -21,6 +21,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-platform_hub}
     volumes:
       - pg_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hubadmin}"]
       interval: 10s
@@ -95,39 +96,87 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-hubadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform_hub}
       REDIS_URL: redis://redis:6379
-      LEGAL_SERVICE_URL: http://legal-java:8080
-      CYBER_WORKER_URL: http://cyber-python:8000
-      CRYPTO_ENGINE_URL: http://core-cpp:9000
+      TOC_API_URL: http://toc-backend:4000
+      NOTARY_API_URL: http://notary-service:3001
+      CYBER_API_URL: http://cyber-service:8001
+      TRAINING_API_URL: http://training-service:3002
+      RD_LAB_API_URL: http://rd-lab-java:8080
+      CORE_CPP_URL: http://core-cpp:9000
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - hub_internal
 
-  legal-java:
-    image: ghcr.io/afrodojo/${JAVA_SPOKE_REPO:-legal-notary-service}:latest
+  toc-backend:
+    image: ghcr.io/afrodojo/toc-backend:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hubadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform_hub}
+      REDIS_URL: redis://redis:6379
+      PORT: 4000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - hub_internal
+
+  notary-service:
+    image: ghcr.io/afrodojo/eds-notary-process-server-division:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hubadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform_hub}
+      REDIS_URL: redis://redis:6379
+      CORE_CPP_URL: http://core-cpp:9000
+      PORT: 3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - hub_internal
+
+  cyber-service:
+    image: ghcr.io/afrodojo/cybersecuritydivision:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hubadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform_hub}
+      REDIS_URL: redis://redis:6379
+      STRIX_API_KEY: ${STRIX_API_KEY:-}
+      PORT: 8001
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - hub_internal
+
+  training-service:
+    image: ghcr.io/afrodojo/cyberdojosensei:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hubadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform_hub}
+      REDIS_URL: redis://redis:6379
+      PORT: 3002
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - hub_internal
+
+  rd-lab-java:
+    image: ghcr.io/afrodojo/sensei-phd:latest
     restart: unless-stopped
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-platform_hub}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-hubadmin}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_HOST: redis
+      SERVER_PORT: 8080
     depends_on:
-      - postgres
-    networks:
-      - hub_internal
-
-  cyber-python:
-    image: ghcr.io/afrodojo/${PYTHON_SPOKE_REPO:-cyber-rd-worker}:latest
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-hubadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform_hub}
-      CELERY_BROKER_URL: redis://redis:6379/1
-      STRIX_API_KEY: ${STRIX_API_KEY:-}
-    depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
     networks:
       - hub_internal
 
