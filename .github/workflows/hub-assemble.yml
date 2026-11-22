@@ -1,4 +1,4 @@
-name: Assemble & Deploy Unified Platform Hub
+name: Assemble, Build & Verify Unified Platform Hub
 
 on:
   push:
@@ -6,8 +6,12 @@ on:
   repository_dispatch:
     types: [spoke-updated]
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  assemble-and-verify:
+  build-hub-portal:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,11 +23,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Assembly Status
+      - name: Build and Push Hub Portal Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+      - name: Validate Unified Compose Stack
         env:
           TRIGGERED_BY: ${{ github.event.client_payload.service || 'hub-direct' }}
-          SPOKE_LANG: ${{ github.event.client_payload.language || 'hub' }}
+          SPOKE_LANG: ${{ github.event.client_payload.language || 'node' }}
         run: |
-          echo "Central Hub triggered by: $TRIGGERED_BY ($SPOKE_LANG)"
+          echo "Central Hub assembled (triggered by: $TRIGGERED_BY / $SPOKE_LANG)"
           docker compose -f docker-compose.prod.yml config -q
-          echo "docker-compose.prod.yml validated successfully."
