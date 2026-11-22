@@ -1,0 +1,154 @@
+{
+  "name": "Unified Hub — Cross-Division Ingestion & Evidence Router",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "pop",
+        "list": "hub:ingestion_queue",
+        "tail": true,
+        "options": {}
+      },
+      "id": "redis-intake-trigger",
+      "name": "Redis Ingestion Queue",
+      "type": "n8n-nodes-base.redisTrigger",
+      "typeVersion": 1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ JSON.parse($json.message).division }}",
+                    "rightValue": "cyber",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Cyber Defense"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ JSON.parse($json.message).division }}",
+                    "rightValue": "notary",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Notary & Process Server"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ JSON.parse($json.message).division }}",
+                    "rightValue": "training",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Cyber Dojo Training"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ JSON.parse($json.message).division }}",
+                    "rightValue": "rd_lab",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Doctoral R&D Lab"
+            }
+          ]
+        }
+      },
+      "id": "division-router",
+      "name": "Route by Division",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://cyber-service:8001/scan",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.message }}"
+      },
+      "id": "dispatch-cyber",
+      "name": "Trigger Cyber Division Scan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 120]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://notary-service:3001/intake",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.message }}"
+      },
+      "id": "dispatch-notary",
+      "name": "Trigger Notary & Process Server",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 260]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://training-service:3002/assign",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.message }}"
+      },
+      "id": "dispatch-training",
+      "name": "Trigger Cyber Dojo Training",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://rd-lab-java:8080/api/experiments/ingest",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.message }}"
+      },
+      "id": "dispatch-rd",
+      "name": "Trigger Sensei-PhD R&D Lab",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 540]
+    }
+  ],
+  "connections": {
+    "Redis Ingestion Queue": {
+      "main": [[{ "node": "Route by Division", "type": "main", "index": 0 }]]
+    },
+    "Route by Division": {
+      "main": [
+        [{ "node": "Trigger Cyber Division Scan", "type": "main", "index": 0 }],
+        [{ "node": "Trigger Notary & Process Server", "type": "main", "index": 0 }],
+        [{ "node": "Trigger Cyber Dojo Training", "type": "main", "index": 0 }],
+        [{ "node": "Trigger Sensei-PhD R&D Lab", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}
