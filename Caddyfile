@@ -22,6 +22,22 @@
     }
 
     # Main SMB Client Portal & Intake Web App (HTML/TypeScript/Node)
+    handle_path /corporate/* {
+        reverse_proxy eds-corporate:3000
+    }
+
+    handle_path /api/defense-training/* {
+        reverse_proxy defense-training:3000
+    }
+
+    handle_path /api/hive/* {
+        reverse_proxy hive-alignment:8000
+    }
+
+    handle_path /api/unity/* {
+        reverse_proxy morman-unity:3000
+    }
+
     handle {
         reverse_proxy hub-web:3000
     }

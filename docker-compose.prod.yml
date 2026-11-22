@@ -189,6 +189,54 @@ services:
     networks:
       - hub_internal
 
+
+  eds-corporate:
+    image: ghcr.io/afrodojo/emerging-defense-solutions-update:latest
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+    networks:
+      - hub_internal
+
+  defense-training:
+    image: ghcr.io/afrodojo/eds-defense-training-division:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hubadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform_hub}
+      REDIS_URL: redis://redis:6379
+      PORT: 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - hub_internal
+
+  hive-alignment:
+    image: ghcr.io/afrodojo/hive-alignment:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hubadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform_hub}
+      REDIS_URL: redis://redis:6379
+      PORT: 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - hub_internal
+
+  morman-unity:
+    image: ghcr.io/afrodojo/morman-empowered-unity:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hubadmin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform_hub}
+      REDIS_URL: redis://redis:6379
+      PORT: 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - hub_internal
+
 volumes:
   caddy_data:
   caddy_config:
