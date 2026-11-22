@@ -34,7 +34,6 @@ jobs:
       - name: Java Build & Security Check
         if: inputs.language == 'java'
         run: |
-          echo "Running Java security validation..."
           if [ -f "pom.xml" ]; then mvn -B test-compile; fi
           if [ -f "gradlew" ]; then chmod +x gradlew && ./gradlew classes; fi
 
