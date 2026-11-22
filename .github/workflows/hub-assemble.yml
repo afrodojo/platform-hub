@@ -7,7 +7,7 @@ on:
     types: [spoke-updated]
 
 jobs:
-  assemble-and-deploy:
+  assemble-and-verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,26 +19,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Harden HTML/TypeScript Client Bundle (BLA)
-        run: |
-          echo "Running Blind LLM Agents (BLA) build-time obfuscation on Hub UI..."
-          # npm ci && npm run build && npx bla-harden ./dist
-
-      - name: Pull Latest Spoke Containers & Deploy Unified Stack
+      - name: Assembly Status
         env:
           TRIGGERED_BY: ${{ github.event.client_payload.service || 'hub-direct' }}
+          SPOKE_LANG: ${{ github.event.client_payload.language || 'hub' }}
         run: |
-          echo "Assembling platform triggered by: $TRIGGERED_BY"
-          # Pulls latest Java, C/C++, Python, and Node containers defined in docker-compose.prod.yml
-          # docker compose -f docker-compose.prod.yml pull
-          # docker compose -f docker-compose.prod.yml up -d --remove-orphans
-
-      - name: Post-Deploy Live Security Verification (Nuclei, Strix, PyRIT)
-        env:
-          TARGET_URL: ${{ vars.STAGING_HUB_URL }}
-          STRIX_API_KEY: ${{ secrets.STRIX_API_KEY }}
-        run: |
-          echo "Running Nuclei, Strix, and PyRIT against $TARGET_URL..."
-          # nuclei -u "$TARGET_URL" -severity critical,high
-          # docker run --rm usestrix/strix attack --target "$TARGET_URL"
-          # python -m pyrit --target "$TARGET_URL"
+          echo "Central Hub triggered by: $TRIGGERED_BY ($SPOKE_LANG)"
+          docker compose -f docker-compose.prod.yml config -q
+          echo "docker-compose.prod.yml validated successfully."

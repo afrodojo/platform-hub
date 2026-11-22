@@ -1,0 +1,28 @@
+{$HUB_DOMAIN:localhost} {
+    encode gzip zstd
+
+    # Visual Workflow Builder (n8n)
+    handle_path /workflows/* {
+        reverse_proxy n8n:5678
+    }
+
+    # Notary, Process Server & Compliance API (Java)
+    handle_path /api/legal/* {
+        reverse_proxy legal-java:8080
+    }
+
+    # Cyber Monitoring, AI Red-Teaming & R&D API (Python)
+    handle_path /api/cyber/* {
+        reverse_proxy cyber-python:8000
+    }
+
+    # High-Speed Hashing & Binary Scanner Service (C/C++)
+    handle_path /api/core/* {
+        reverse_proxy core-cpp:9000
+    }
+
+    # Main SMB Client Portal & Intake Web App (HTML/TypeScript/Node)
+    handle {
+        reverse_proxy hub-web:3000
+    }
+}

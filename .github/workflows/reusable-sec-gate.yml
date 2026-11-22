@@ -1,0 +1,47 @@
+name: Reusable Polyglot Security Gate
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        required: true
+        type: string
+
+jobs:
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog Secret Scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
+
+      - name: Semgrep SAST Scan
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: auto
+
+      - name: C/C++ Static Analysis
+        if: inputs.language == 'cpp'
+        run: |
+          sudo apt-get update && sudo apt-get install -y cppcheck
+          cppcheck --enable=warning,performance,portability --error-exitcode=1 .
+
+      - name: Java Build & Security Check
+        if: inputs.language == 'java'
+        run: |
+          echo "Running Java security validation..."
+          if [ -f "pom.xml" ]; then mvn -B test-compile; fi
+          if [ -f "gradlew" ]; then chmod +x gradlew && ./gradlew classes; fi
+
+      - name: Trivy Vulnerability Scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
