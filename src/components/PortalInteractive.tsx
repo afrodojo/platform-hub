@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ShieldCheck,
   Scale,
@@ -11,6 +11,7 @@ import {
   Sparkles,
   FileCheck2,
   Activity,
+  Database,
 } from 'lucide-react';
 
 interface CaseItem {
@@ -18,6 +19,18 @@ interface CaseItem {
   division: string;
   title: string;
   priority: string;
+  status: string;
+  created_at: string;
+}
+
+interface AuditReceipt {
+  id: number | null;
+  intake_uuid: string;
+  client_name: string;
+  division: string;
+  priority: string;
+  sha256_receipt: string;
+  routed_endpoint: string;
   status: string;
   created_at: string;
 }
@@ -39,20 +52,37 @@ interface Props {
 }
 
 export default function PortalInteractive(props: Props) {
-  const [division, setDivision] = useState<'cyber' | 'notary' | 'training' | 'rd_lab'>('cyber');
+  const [division, setDivision] = useState<string>('cyber');
   const [title, setTitle] = useState('');
   const [payload, setPayload] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [ingestFeedback, setIngestFeedback] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [latestReceipt, setLatestReceipt] = useState<AuditReceipt | null>(null);
+  const [receipts, setReceipts] = useState<AuditReceipt[]>([]);
   const [cases, setCases] = useState<CaseItem[]>(props.initialCases);
   const [optIn, setOptIn] = useState(props.rdTelemetryOptIn);
   const [billingLoading, setBillingLoading] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/receipts')
+      .then((res) => res.json())
+      .then((data) => {
+        if (active && Array.isArray(data.receipts)) {
+          setReceipts(data.receipts);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function handleIngest(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim() || !payload.trim()) return;
     setSubmitting(true);
-    setIngestFeedback(null);
+    setErrorMsg(null);
 
     try {
       const res = await fetch('/api/ingest', {
@@ -60,6 +90,7 @@ export default function PortalInteractive(props: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           orgId: props.orgId,
+          orgName: props.orgName,
           division,
           title,
           payload,
@@ -69,22 +100,35 @@ export default function PortalInteractive(props: Props) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Submission failed');
 
-      setIngestFeedback(`Queued (${data.sha256.slice(0, 12)}?) and routed to ${division.toUpperCase()} division.`);
+      const newReceipt: AuditReceipt = {
+        id: data.dbId ?? null,
+        intake_uuid: data.intakeId || `INT-${Date.now()}`,
+        client_name: props.orgName,
+        division,
+        priority: division === 'cyber' ? 'high' : 'standard',
+        sha256_receipt: data.sha256,
+        routed_endpoint: data.routedEndpoint || 'http://hub-web:3000/',
+        status: data.status || 'persisted',
+        created_at: data.timestamp || new Date().toISOString(),
+      };
+
+      setLatestReceipt(newReceipt);
+      setReceipts((prev) => [newReceipt, ...prev].slice(0, 15));
       setCases((prev) => [
         {
-          id: data.caseId || data.ingestedId,
+          id: data.caseId || data.ingestedId || newReceipt.intake_uuid,
           division,
           title,
           priority: division === 'cyber' ? 'high' : 'normal',
-          status: 'open',
-          created_at: new Date().toISOString(),
+          status: 'attested',
+          created_at: newReceipt.created_at,
         },
         ...prev,
       ]);
       setTitle('');
       setPayload('');
     } catch (err: unknown) {
-      setIngestFeedback(err instanceof Error ? err.message : 'Submission error');
+      setErrorMsg(err instanceof Error ? err.message : 'Submission error');
     } finally {
       setSubmitting(false);
     }
@@ -125,7 +169,7 @@ export default function PortalInteractive(props: Props) {
       <header className="flex flex-col gap-4 border-b border-slate-800 pb-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-400 ring-1 ring-inset ring-emerald-500/30">
-            <Activity className="h-3.5 w-3.5" /> Unified Hub Active ? {props.orgName}
+            <Activity className="h-3.5 w-3.5" /> Unified Hub Active • {props.orgName}
           </span>
           <h1 className="mt-2 text-2xl font-bold tracking-tight text-white sm:text-3xl">
             SMB Cyber, Legal & Applied R&D Readiness Portal
@@ -141,7 +185,6 @@ export default function PortalInteractive(props: Props) {
 
       {/* Division Telemetry KPI Cards */}
       <section className="grid gap-5 md:grid-cols-3">
-        {/* Card 1: Cyber Defense & Training */}
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-400">Cyber & Training Division</span>
@@ -152,12 +195,11 @@ export default function PortalInteractive(props: Props) {
             <span className="text-sm text-slate-400">/ 100 Readiness Score</span>
           </div>
           <p className="mt-3 text-xs text-slate-400">
-            Nuclei & Strix Continuous Scans: <strong className="text-rose-400">{props.criticalCount} Critical</strong> ?{' '}
+            Nuclei & Strix Continuous Scans: <strong className="text-rose-400">{props.criticalCount} Critical</strong> •{' '}
             <strong className="text-amber-400">{props.highCount} High</strong>
           </p>
         </div>
 
-        {/* Card 2: Notary & Process Server */}
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-400">Notary & Process Server</span>
@@ -182,7 +224,6 @@ export default function PortalInteractive(props: Props) {
           </p>
         </div>
 
-        {/* Card 3: Doctoral R&D Lab */}
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-400">Doctoral R&D Lab Consortium</span>
@@ -201,7 +242,7 @@ export default function PortalInteractive(props: Props) {
                   : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
               }`}
             >
-              {optIn ? 'IRB Study Opted-In ?' : 'Opt-In to R&D Study'}
+              {optIn ? 'IRB Study Opted-In ✓' : 'Opt-In to R&D Study'}
             </button>
           </div>
           <p className="mt-3 text-xs text-slate-400">
@@ -210,9 +251,8 @@ export default function PortalInteractive(props: Props) {
         </div>
       </section>
 
-      {/* Main Workspace: Smart Multi-Division Intake + Collaborative Case Stream */}
+      {/* Main Workspace: Smart Multi-Division Intake + Collaborative Queue & Postgres Receipts */}
       <section className="grid gap-6 lg:grid-cols-5">
-        {/* Smart Intake Form */}
         <form
           onSubmit={handleIngest}
           className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-6 lg:col-span-2"
@@ -222,20 +262,25 @@ export default function PortalInteractive(props: Props) {
             <h2 className="text-lg font-semibold text-white">Smart Multi-Division Intake</h2>
           </div>
           <p className="text-xs text-slate-400">
-            Submit a domain for continuous monitoring, a legal filing for notarization/service, a staff training request, or an R&D pilot payload.
+            Routed through n8n, attested by the C++20 OpenSSL engine, and persisted in PostgreSQL.
           </p>
 
           <div>
             <label className="block text-xs font-medium text-slate-300">Target Division</label>
             <select
               value={division}
-              onChange={(e) => setDivision(e.target.value as 'cyber' | 'notary' | 'training' | 'rd_lab')}
+              onChange={(e) => setDivision(e.target.value)}
               className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
             >
               <option value="cyber">Cyber Defense & Attack Surface Monitoring</option>
+              <option value="defense">Defense Training Division</option>
               <option value="notary">Notary, Affidavit Vault & Process Server</option>
               <option value="training">Cyber Dojo Workforce Training & Phishing</option>
-              <option value="rd_lab">Doctoral R&D Lab Pilot / Custom Experiment</option>
+              <option value="toc">TOC Enterprise Security Core</option>
+              <option value="hive">Hive Alignment Coordination</option>
+              <option value="unity">Morman Empowered Unity</option>
+              <option value="rd_lab">Doctoral R&D Lab Pilot (Sensei-PhD)</option>
+              <option value="corporate">Emerging Defense Solutions Corporate</option>
             </select>
           </div>
 
@@ -252,11 +297,11 @@ export default function PortalInteractive(props: Props) {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-300">Details, Target URL, or Document Hash/Notes</label>
+            <label className="block text-xs font-medium text-slate-300">Details, Target URL, or Document Notes</label>
             <textarea
               rows={4}
               required
-              placeholder="Enter domain URLs, recipient jurisdiction, or incident details. Payload is SHA-256 hashed on arrival."
+              placeholder="Enter domain URLs, recipient jurisdiction, or incident details. Payload is SHA-256 attested via C++20 OpenSSL."
               value={payload}
               onChange={(e) => setPayload(e.target.value)}
               className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
@@ -269,57 +314,122 @@ export default function PortalInteractive(props: Props) {
             className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:opacity-50"
           >
             <Send className="h-4 w-4" />
-            {submitting ? 'Hashing & Queuing?' : 'Ingest & Route Workflow'}
+            {submitting ? 'Attesting & Persisting...' : 'Ingest, Attest & Route Workflow'}
           </button>
 
-          {ingestFeedback && (
-            <p className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 p-2.5 text-xs text-emerald-300">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              {ingestFeedback}
+          {errorMsg && (
+            <p className="rounded-lg border border-rose-800 bg-rose-950/60 p-2.5 text-xs text-rose-300">
+              {errorMsg}
             </p>
+          )}
+
+          {latestReceipt && (
+            <div className="space-y-1.5 rounded-xl border border-emerald-500/40 bg-emerald-950/30 p-3.5 text-xs">
+              <div className="flex items-center justify-between text-emerald-300">
+                <span className="inline-flex items-center gap-1.5 font-semibold">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  Postgres Row #{latestReceipt.id ?? 'Saved'}
+                </span>
+                <span className="font-mono text-[11px]">{latestReceipt.intake_uuid}</span>
+              </div>
+              <p className="font-mono text-[11px] text-slate-300">
+                Route: {latestReceipt.routed_endpoint}
+              </p>
+              <p className="break-all font-mono text-[11px] text-emerald-400">
+                SHA-256: {latestReceipt.sha256_receipt}
+              </p>
+            </div>
           )}
         </form>
 
-        {/* Cross-Division Collaborative Feed */}
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6 lg:col-span-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <FileCheck2 className="h-5 w-5 text-sky-400" />
-              <h2 className="text-lg font-semibold text-white">Cross-Division Collaborative Queue</h2>
+        <div className="space-y-6 lg:col-span-3">
+          {/* Cross-Division Collaborative Feed */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileCheck2 className="h-5 w-5 text-sky-400" />
+                <h2 className="text-lg font-semibold text-white">Cross-Division Collaborative Queue</h2>
+              </div>
+              <span className="text-xs text-slate-400">{cases.length} active items</span>
             </div>
-            <span className="text-xs text-slate-400">{cases.length} active items</span>
+
+            <div className="mt-4 space-y-3">
+              {cases.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-sm text-slate-400">
+                  No active cases yet. Submit an asset or document on the left to trigger automated cross-division workflows.
+                </div>
+              ) : (
+                cases.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between rounded-xl border border-slate-800/80 bg-slate-950/70 p-4"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded bg-slate-800 px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-300">
+                          {item.division.replace('_', ' ')}
+                        </span>
+                        {item.priority === 'high' || item.priority === 'critical' ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-400">
+                            <AlertTriangle className="h-3.5 w-3.5" /> {item.priority}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-1 font-medium text-white">{item.title}</p>
+                    </div>
+                    <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-medium capitalize text-emerald-400">
+                      {item.status}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
 
-          <div className="mt-4 space-y-3">
-            {cases.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-800 p-8 text-center text-sm text-slate-400">
-                No active cases yet. Submit an asset or document on the left to trigger automated cross-division workflows.
+          {/* Persisted Postgres Cryptographic Audit Ledger */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Database className="h-5 w-5 text-emerald-400" />
+                <h2 className="text-lg font-semibold text-white">PostgreSQL Cryptographic Audit Ledger</h2>
               </div>
-            ) : (
-              cases.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center justify-between rounded-xl border border-slate-800/80 bg-slate-950/70 p-4"
-                >
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="rounded bg-slate-800 px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-300">
-                        {item.division.replace('_', ' ')}
-                      </span>
-                      {item.priority === 'high' || item.priority === 'critical' ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-amber-400">
-                          <AlertTriangle className="h-3.5 w-3.5" /> {item.priority}
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="mt-1 font-medium text-white">{item.title}</p>
-                  </div>
-                  <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-medium capitalize text-emerald-400">
-                    {item.status}
-                  </span>
-                </div>
-              ))
-            )}
+              <span className="text-xs text-slate-400">{receipts.length} persisted receipts</span>
+            </div>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400">
+                    <th className="pb-2 pr-3">ID</th>
+                    <th className="pb-2 pr-3">Intake UUID</th>
+                    <th className="pb-2 pr-3">Division</th>
+                    <th className="pb-2 pr-3">C++20 SHA-256 Digest</th>
+                    <th className="pb-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/70 font-mono text-slate-300">
+                  {receipts.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-4 text-center font-sans text-slate-500">
+                        No persisted receipts yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    receipts.map((r, idx) => (
+                      <tr key={r.intake_uuid || idx}>
+                        <td className="py-2.5 pr-3 text-slate-400">#{r.id ?? '-'}</td>
+                        <td className="py-2.5 pr-3 text-white">{r.intake_uuid}</td>
+                        <td className="py-2.5 pr-3 uppercase text-sky-400">{r.division}</td>
+                        <td className="py-2.5 pr-3 text-emerald-400" title={r.sha256_receipt}>
+                          {r.sha256_receipt ? `${r.sha256_receipt.slice(0, 18)}...` : 'N/A'}
+                        </td>
+                        <td className="py-2.5 capitalize text-emerald-300">{r.status}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </section>
@@ -392,7 +502,7 @@ export default function PortalInteractive(props: Props) {
                 onClick={() => handleCheckout(plan.id)}
                 className="mt-6 w-full rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500 hover:text-slate-950 disabled:opacity-50"
               >
-                {billingLoading === plan.id ? 'Redirecting to Stripe?' : `Subscribe to ${plan.name}`}
+                {billingLoading === plan.id ? 'Redirecting to Stripe...' : `Subscribe to ${plan.name}`}
               </button>
             </div>
           ))}
