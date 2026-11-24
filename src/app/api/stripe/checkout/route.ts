@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { pool } from '@/lib/db';
+import { isLiveStripeConfigured } from '@/lib/stripeConfig';
 
 const TIERS: Record<string, { name: string; unitAmount: number; description: string }> = {
   essentials: {
@@ -29,16 +30,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid subscription tier.' }, { status: 400 });
     }
 
-    const secretKey = process.env.STRIPE_SECRET_KEY;
-    if (!secretKey || secretKey.startsWith('sk_test_replace')) {
+    if (!isLiveStripeConfigured()) {
       return NextResponse.json({
         sandboxAvailable: true,
         tier,
-        message: 'STRIPE_SECRET_KEY not configured; sandbox provisioning available.',
+        message: 'Placeholder STRIPE_SECRET_KEY detected; sandbox provisioning active.',
       });
     }
 
-    const stripe = new Stripe(secretKey);
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
     let existingCustomerId: string | undefined;
     if (orgId) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { pool } from '@/lib/db';
+import { isLiveStripeConfigured } from '@/lib/stripeConfig';
 
 const TIER_ALLOWANCES: Record<string, { ron: number; process: number; rd: boolean }> = {
   essentials: { ron: 2, process: 0, rd: false },
@@ -9,8 +10,7 @@ const TIER_ALLOWANCES: Record<string, { ron: number; process: number; rd: boolea
 
 export async function POST(req: NextRequest) {
   try {
-    const secretKey = process.env.STRIPE_SECRET_KEY;
-    if (secretKey && !secretKey.startsWith('sk_test_replace')) {
+    if (isLiveStripeConfigured()) {
       return NextResponse.json(
         { error: 'Live Stripe mode is active; use /api/stripe/checkout.' },
         { status: 403 }
