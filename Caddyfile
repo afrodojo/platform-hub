@@ -41,7 +41,7 @@ localhost {
     }
 
 
-    handle /workflows* {
+    handle_path /workflows* {
         reverse_proxy n8n:5678
     }
 
