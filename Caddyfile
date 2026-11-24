@@ -36,6 +36,10 @@ localhost {
     handle_path /api/rd/* {
         reverse_proxy rd-lab-java:3000
     }
+    handle_path /api/crypto/* {
+        reverse_proxy core-cpp:8080
+    }
+
 
     handle /workflows* {
         reverse_proxy n8n:5678
