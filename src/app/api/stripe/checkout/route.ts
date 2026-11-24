@@ -1,19 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { pool } from '@/lib/db';
 
 const TIERS: Record<string, { name: string; unitAmount: number; description: string }> = {
   essentials: {
-    name: 'Essentials ? Monitor & Seal',
+    name: 'Essentials — Monitor & Seal',
     unitAmount: 19900,
     description: 'Monthly Nuclei external scan, staff cyber micro-training, and 2 Remote Online Notarizations/mo.',
   },
   growth: {
-    name: 'Growth ? Active Defense & Ops',
+    name: 'Growth — Active Defense & Ops',
     unitAmount: 59900,
     description: 'Weekly Nuclei + Strix AI pen-testing, phishing sims, 5 RONs/mo, priority process serving & evidence vault.',
   },
   rd_lab_partner: {
-    name: 'R&D Lab Partner ? Enterprise Shield',
+    name: 'R&D Lab Partner — Enterprise Shield',
     unitAmount: 195000,
     description: 'PyRIT AI red-teaming, priority legal dispatch SLA, and Doctoral R&D Lab Consortium membership.',
   },
@@ -21,15 +22,6 @@ const TIERS: Record<string, { name: string; unitAmount: number; description: str
 
 export async function POST(req: NextRequest) {
   try {
-    const secretKey = process.env.STRIPE_SECRET_KEY;
-    if (!secretKey || secretKey.startsWith('sk_test_replace')) {
-      return NextResponse.json(
-        { error: 'Configure STRIPE_SECRET_KEY in .env to enable live checkout.' },
-        { status: 503 }
-      );
-    }
-
-    const stripe = new Stripe(secretKey);
     const { tier, orgId } = await req.json();
     const selected = TIERS[tier];
 
@@ -37,10 +29,37 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid subscription tier.' }, { status: 400 });
     }
 
-    const origin = req.headers.get('origin') || 'http://localhost:3000';
+    const secretKey = process.env.STRIPE_SECRET_KEY;
+    if (!secretKey || secretKey.startsWith('sk_test_replace')) {
+      return NextResponse.json({
+        sandboxAvailable: true,
+        tier,
+        message: 'STRIPE_SECRET_KEY not configured; sandbox provisioning available.',
+      });
+    }
+
+    const stripe = new Stripe(secretKey);
+
+    let existingCustomerId: string | undefined;
+    if (orgId) {
+      const orgRes = await pool.query(
+        `SELECT stripe_customer_id FROM organizations WHERE id = $1 LIMIT 1`,
+        [orgId]
+      );
+      if (orgRes.rows[0]?.stripe_customer_id) {
+        existingCustomerId = orgRes.rows[0].stripe_customer_id;
+      }
+    }
+
+    const forwardedHost = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'localhost';
+    const forwardedProto = req.headers.get('x-forwarded-proto') || 'https';
+    const origin = req.headers.get('origin') || `${forwardedProto}://${forwardedHost}`;
+
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       payment_method_types: ['card'],
+      ...(existingCustomerId ? { customer: existingCustomerId } : {}),
+      client_reference_id: orgId || undefined,
       line_items: [
         {
           price_data: {
@@ -55,6 +74,9 @@ export async function POST(req: NextRequest) {
           quantity: 1,
         },
       ],
+      subscription_data: {
+        metadata: { orgId: orgId || '', tier },
+      },
       metadata: { orgId: orgId || '', tier },
       success_url: `${origin}/?checkout=success&tier=${tier}`,
       cancel_url: `${origin}/?checkout=cancelled`,

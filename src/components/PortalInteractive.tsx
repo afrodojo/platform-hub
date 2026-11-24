@@ -12,6 +12,8 @@ import {
   FileCheck2,
   Activity,
   Database,
+  ShieldAlert,
+  BadgeCheck,
 } from 'lucide-react';
 
 interface CaseItem {
@@ -31,6 +33,7 @@ interface AuditReceipt {
   priority: string;
   sha256_receipt: string;
   routed_endpoint: string;
+  spoke_status?: string;
   status: string;
   created_at: string;
 }
@@ -59,9 +62,18 @@ export default function PortalInteractive(props: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [latestReceipt, setLatestReceipt] = useState<AuditReceipt | null>(null);
   const [receipts, setReceipts] = useState<AuditReceipt[]>([]);
+  const [verifyState, setVerifyState] = useState<Record<string, 'verifying' | 'verified' | 'mismatch'>>({});
   const [cases, setCases] = useState<CaseItem[]>(props.initialCases);
   const [optIn, setOptIn] = useState(props.rdTelemetryOptIn);
+
+  const [activeTier, setActiveTier] = useState(props.tier);
+  const [ronRemaining, setRonRemaining] = useState(props.ronRemaining);
+  const [ronMonthly, setRonMonthly] = useState(props.ronMonthly);
+  const [processRemaining, setProcessRemaining] = useState(props.processRemaining);
+  const [processMonthly, setProcessMonthly] = useState(props.processMonthly);
+  const [rdLabAccess, setRdLabAccess] = useState(props.rdLabAccess);
   const [billingLoading, setBillingLoading] = useState<string | null>(null);
+  const [billingBanner, setBillingBanner] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -73,10 +85,42 @@ export default function PortalInteractive(props: Props) {
         }
       })
       .catch(() => {});
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('checkout') === 'success') {
+        const t = params.get('tier') || props.tier;
+        setBillingBanner(`Stripe subscription confirmed — ${t.replace(/_/g, ' ').toUpperCase()} tier active.`);
+      }
+    }
+
     return () => {
       active = false;
     };
-  }, []);
+  }, [props.tier]);
+
+  async function handleVerifyReceipt(receipt: AuditReceipt) {
+    const key = receipt.intake_uuid;
+    setVerifyState((prev) => ({ ...prev, [key]: 'verifying' }));
+    try {
+      const res = await fetch('/api/receipts/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: receipt.id,
+          intake_uuid: receipt.intake_uuid,
+          sha256: receipt.sha256_receipt,
+        }),
+      });
+      const data = await res.json();
+      setVerifyState((prev) => ({
+        ...prev,
+        [key]: res.ok && data.verified ? 'verified' : 'mismatch',
+      }));
+    } catch {
+      setVerifyState((prev) => ({ ...prev, [key]: 'mismatch' }));
+    }
+  }
 
   async function handleIngest(e: React.FormEvent) {
     e.preventDefault();
@@ -108,6 +152,7 @@ export default function PortalInteractive(props: Props) {
         priority: division === 'cyber' ? 'high' : 'standard',
         sha256_receipt: data.sha256,
         routed_endpoint: data.routedEndpoint || 'http://hub-web:3000/',
+        spoke_status: data.spokeStatus || 'delivered_http_200',
         status: data.status || 'persisted',
         created_at: data.timestamp || new Date().toISOString(),
       };
@@ -136,6 +181,7 @@ export default function PortalInteractive(props: Props) {
 
   async function handleCheckout(selectedTier: string) {
     setBillingLoading(selectedTier);
+    setBillingBanner(null);
     try {
       const res = await fetch('/api/stripe/checkout', {
         method: 'POST',
@@ -145,9 +191,31 @@ export default function PortalInteractive(props: Props) {
       const data = await res.json();
       if (data.url) {
         window.location.href = data.url;
-      } else {
-        alert(data.error || 'Stripe checkout is not configured yet.');
+        return;
       }
+
+      if (data.sandboxAvailable) {
+        const provRes = await fetch('/api/stripe/provision', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orgId: props.orgId, tier: selectedTier }),
+        });
+        const provData = await provRes.json();
+        if (provRes.ok && provData.ok) {
+          setActiveTier(provData.tier);
+          setRonMonthly(provData.ronMonthly);
+          setRonRemaining(provData.ronRemaining);
+          setProcessMonthly(provData.processMonthly);
+          setProcessRemaining(provData.processRemaining);
+          setRdLabAccess(provData.rdLabAccess);
+          setBillingBanner(
+            `Provisioned ${selectedTier.replace(/_/g, ' ').toUpperCase()} tier in PostgreSQL (${provData.ronMonthly} RONs, ${provData.processMonthly} Process Serves).`
+          );
+          return;
+        }
+      }
+
+      alert(data.error || 'Stripe checkout is not configured yet.');
     } finally {
       setBillingLoading(null);
     }
@@ -178,10 +246,17 @@ export default function PortalInteractive(props: Props) {
         <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3 text-right">
           <p className="text-xs uppercase tracking-wider text-slate-400">Active Subscription</p>
           <p className="text-lg font-semibold capitalize text-emerald-400">
-            {props.tier.replace(/_/g, ' ')}
+            {activeTier.replace(/_/g, ' ')}
           </p>
         </div>
       </header>
+
+      {billingBanner && (
+        <div className="flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-300">
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+          <span>{billingBanner}</span>
+        </div>
+      )}
 
       {/* Division Telemetry KPI Cards */}
       <section className="grid gap-5 md:grid-cols-3">
@@ -208,13 +283,13 @@ export default function PortalInteractive(props: Props) {
           <div className="mt-4 flex items-baseline gap-4">
             <div>
               <span className="text-3xl font-bold text-white">
-                {props.ronRemaining}/{props.ronMonthly}
+                {ronRemaining}/{ronMonthly}
               </span>
               <span className="ml-1.5 text-xs text-slate-400">RON Credits</span>
             </div>
             <div className="border-l border-slate-800 pl-4">
               <span className="text-3xl font-bold text-white">
-                {props.processRemaining}/{props.processMonthly}
+                {processRemaining}/{processMonthly}
               </span>
               <span className="ml-1.5 text-xs text-slate-400">Process Serves</span>
             </div>
@@ -231,7 +306,7 @@ export default function PortalInteractive(props: Props) {
           </div>
           <div className="mt-4 flex items-center justify-between">
             <span className="text-lg font-semibold text-white">
-              {props.rdLabAccess ? 'Lab Partner Unlocked' : 'Standard Telemetry'}
+              {rdLabAccess ? 'Lab Partner Unlocked' : 'Standard Telemetry'}
             </span>
             <button
               type="button"
@@ -262,7 +337,7 @@ export default function PortalInteractive(props: Props) {
             <h2 className="text-lg font-semibold text-white">Smart Multi-Division Intake</h2>
           </div>
           <p className="text-xs text-slate-400">
-            Routed through n8n, attested by the C++20 OpenSSL engine, and persisted in PostgreSQL.
+            Attested via C++20 OpenSSL, forwarded to the target division spoke by n8n, and persisted in PostgreSQL.
           </p>
 
           <div>
@@ -314,7 +389,7 @@ export default function PortalInteractive(props: Props) {
             className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:opacity-50"
           >
             <Send className="h-4 w-4" />
-            {submitting ? 'Attesting & Persisting...' : 'Ingest, Attest & Route Workflow'}
+            {submitting ? 'Attesting & Dispatching...' : 'Ingest, Attest & Route Workflow'}
           </button>
 
           {errorMsg && (
@@ -324,7 +399,7 @@ export default function PortalInteractive(props: Props) {
           )}
 
           {latestReceipt && (
-            <div className="space-y-1.5 rounded-xl border border-emerald-500/40 bg-emerald-950/30 p-3.5 text-xs">
+            <div className="space-y-2 rounded-xl border border-emerald-500/40 bg-emerald-950/30 p-3.5 text-xs">
               <div className="flex items-center justify-between text-emerald-300">
                 <span className="inline-flex items-center gap-1.5 font-semibold">
                   <CheckCircle2 className="h-4 w-4 shrink-0" />
@@ -333,11 +408,25 @@ export default function PortalInteractive(props: Props) {
                 <span className="font-mono text-[11px]">{latestReceipt.intake_uuid}</span>
               </div>
               <p className="font-mono text-[11px] text-slate-300">
-                Route: {latestReceipt.routed_endpoint}
+                Spoke: {latestReceipt.routed_endpoint} ({latestReceipt.spoke_status || 'delivered'})
               </p>
               <p className="break-all font-mono text-[11px] text-emerald-400">
                 SHA-256: {latestReceipt.sha256_receipt}
               </p>
+              <button
+                type="button"
+                onClick={() => handleVerifyReceipt(latestReceipt)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20"
+              >
+                <BadgeCheck className="h-3.5 w-3.5" />
+                {verifyState[latestReceipt.intake_uuid] === 'verifying'
+                  ? 'Verifying via C++20...'
+                  : verifyState[latestReceipt.intake_uuid] === 'verified'
+                  ? 'C++20 CRYPTO_memcmp Verified ✓'
+                  : verifyState[latestReceipt.intake_uuid] === 'mismatch'
+                  ? 'Digest Mismatch ✗'
+                  : 'Verify Digest via C++20'}
+              </button>
             </div>
           )}
         </form>
@@ -403,29 +492,55 @@ export default function PortalInteractive(props: Props) {
                     <th className="pb-2 pr-3">ID</th>
                     <th className="pb-2 pr-3">Intake UUID</th>
                     <th className="pb-2 pr-3">Division</th>
-                    <th className="pb-2 pr-3">C++20 SHA-256 Digest</th>
-                    <th className="pb-2">Status</th>
+                    <th className="pb-2 pr-3">C++20 SHA-256</th>
+                    <th className="pb-2 pr-3">Spoke</th>
+                    <th className="pb-2 text-right">Attestation</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/70 font-mono text-slate-300">
                   {receipts.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-4 text-center font-sans text-slate-500">
+                      <td colSpan={6} className="py-4 text-center font-sans text-slate-500">
                         No persisted receipts yet.
                       </td>
                     </tr>
                   ) : (
-                    receipts.map((r, idx) => (
-                      <tr key={r.intake_uuid || idx}>
-                        <td className="py-2.5 pr-3 text-slate-400">#{r.id ?? '-'}</td>
-                        <td className="py-2.5 pr-3 text-white">{r.intake_uuid}</td>
-                        <td className="py-2.5 pr-3 uppercase text-sky-400">{r.division}</td>
-                        <td className="py-2.5 pr-3 text-emerald-400" title={r.sha256_receipt}>
-                          {r.sha256_receipt ? `${r.sha256_receipt.slice(0, 18)}...` : 'N/A'}
-                        </td>
-                        <td className="py-2.5 capitalize text-emerald-300">{r.status}</td>
-                      </tr>
-                    ))
+                    receipts.map((r, idx) => {
+                      const vState = verifyState[r.intake_uuid];
+                      return (
+                        <tr key={r.intake_uuid || idx}>
+                          <td className="py-2.5 pr-3 text-slate-400">#{r.id ?? '-'}</td>
+                          <td className="py-2.5 pr-3 text-white">{r.intake_uuid}</td>
+                          <td className="py-2.5 pr-3 uppercase text-sky-400">{r.division}</td>
+                          <td className="py-2.5 pr-3 text-emerald-400" title={r.sha256_receipt}>
+                            {r.sha256_receipt ? `${r.sha256_receipt.slice(0, 14)}...` : 'N/A'}
+                          </td>
+                          <td className="py-2.5 pr-3 text-[11px] text-slate-400">
+                            {r.spoke_status || 'routed'}
+                          </td>
+                          <td className="py-2.5 text-right font-sans">
+                            {vState === 'verified' ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+                                <BadgeCheck className="h-3.5 w-3.5" /> Verified
+                              </span>
+                            ) : vState === 'mismatch' ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-rose-500/15 px-2 py-0.5 text-[11px] font-medium text-rose-300">
+                                <ShieldAlert className="h-3.5 w-3.5" /> Mismatch
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={vState === 'verifying'}
+                                onClick={() => handleVerifyReceipt(r)}
+                                className="rounded border border-slate-700 bg-slate-800/80 px-2 py-0.5 text-[11px] font-medium text-slate-200 hover:border-emerald-500/50 hover:text-emerald-300 disabled:opacity-50"
+                              >
+                                {vState === 'verifying' ? 'Checking...' : 'Verify SHA-256'}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
@@ -475,37 +590,55 @@ export default function PortalInteractive(props: Props) {
                 'Early beta access to Sensei-PhD defense tools',
               ],
             },
-          ].map((plan) => (
-            <div
-              key={plan.id}
-              className="flex flex-col justify-between rounded-2xl border border-slate-800 bg-slate-900/60 p-6"
-            >
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-emerald-400">{plan.subtitle}</p>
-                <h3 className="mt-1 text-xl font-bold text-white">{plan.name}</h3>
-                <p className="mt-3 text-3xl font-extrabold text-white">
-                  {plan.price}
-                  <span className="text-sm font-normal text-slate-400"> / mo</span>
-                </p>
-                <ul className="mt-5 space-y-2.5 text-sm text-slate-300">
-                  {plan.features.map((f) => (
-                    <li key={f} className="flex items-start gap-2">
-                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-                      <span>{f}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <button
-                type="button"
-                disabled={billingLoading === plan.id}
-                onClick={() => handleCheckout(plan.id)}
-                className="mt-6 w-full rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500 hover:text-slate-950 disabled:opacity-50"
+          ].map((plan) => {
+            const isCurrent = activeTier === plan.id;
+            return (
+              <div
+                key={plan.id}
+                className={`flex flex-col justify-between rounded-2xl border p-6 ${
+                  isCurrent
+                    ? 'border-emerald-500/60 bg-emerald-950/20'
+                    : 'border-slate-800 bg-slate-900/60'
+                }`}
               >
-                {billingLoading === plan.id ? 'Redirecting to Stripe...' : `Subscribe to ${plan.name}`}
-              </button>
-            </div>
-          ))}
+                <div>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-emerald-400">{plan.subtitle}</p>
+                    {isCurrent && (
+                      <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-300">
+                        Current Plan
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="mt-1 text-xl font-bold text-white">{plan.name}</h3>
+                  <p className="mt-3 text-3xl font-extrabold text-white">
+                    {plan.price}
+                    <span className="text-sm font-normal text-slate-400"> / mo</span>
+                  </p>
+                  <ul className="mt-5 space-y-2.5 text-sm text-slate-300">
+                    {plan.features.map((f) => (
+                      <li key={f} className="flex items-start gap-2">
+                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                        <span>{f}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <button
+                  type="button"
+                  disabled={billingLoading === plan.id || isCurrent}
+                  onClick={() => handleCheckout(plan.id)}
+                  className="mt-6 w-full rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500 hover:text-slate-950 disabled:opacity-50"
+                >
+                  {isCurrent
+                    ? 'Active Subscription'
+                    : billingLoading === plan.id
+                    ? 'Provisioning...'
+                    : `Subscribe to ${plan.name}`}
+                </button>
+              </div>
+            );
+          })}
         </div>
       </section>
     </div>
