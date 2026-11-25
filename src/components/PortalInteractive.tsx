@@ -17,6 +17,7 @@ import {
   Bot,
   Building2,
   PlusCircle,
+  KeyRound,
 } from 'lucide-react';
 
 interface CaseItem {
@@ -65,6 +66,7 @@ interface AgentRun {
   proposed_actions: Array<{ action?: string; target?: string; credit_deducted?: string; reason?: string }>;
   payload_preview?: { title?: string; targetChannel?: string; summary?: string } | null;
   confidence_score: string | number | null;
+  requires_step_up_code?: boolean;
   approval_status: string;
   execution_status: string;
   created_at: string;
@@ -87,6 +89,11 @@ interface Props {
 }
 
 const HITL_DOMAINS = ['all', 'subscriptions', 'seo', 'marketing', 'social', 'infra', 'operations'] as const;
+const STEP_UP_DOMAINS = new Set(['subscriptions', 'infra']);
+
+function needsRotatingCode(run: AgentRun): boolean {
+  return Boolean(run.requires_step_up_code) || STEP_UP_DOMAINS.has((run.domain_category || '').toLowerCase());
+}
 
 export default function PortalInteractive(props: Props) {
   const [tenants, setTenants] = useState<OrgTenant[]>([]);
@@ -108,6 +115,10 @@ export default function PortalInteractive(props: Props) {
   const [draftChannel, setDraftChannel] = useState('');
   const [draftBody, setDraftBody] = useState('');
   const [stagingDraft, setStagingDraft] = useState(false);
+
+  const [stepUpRunId, setStepUpRunId] = useState<number | null>(null);
+  const [rotatingCodeInput, setRotatingCodeInput] = useState('');
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   const [verifyState, setVerifyState] = useState<Record<string, 'verifying' | 'verified' | 'mismatch'>>({});
   const [cases, setCases] = useState<CaseItem[]>(props.initialCases);
@@ -189,11 +200,15 @@ export default function PortalInteractive(props: Props) {
     setOptIn(selected.rd_telemetry_opt_in);
     setLatestReceipt(null);
     setBillingBanner(null);
+    setApprovalError(null);
+    setStepUpRunId(null);
+    setRotatingCodeInput('');
     loadTenantData(selected.id, domainFilter);
   }
 
   function handleDomainTab(nextDomain: string) {
     setDomainFilter(nextDomain);
+    setApprovalError(null);
     loadTenantData(currentOrgId, nextDomain);
   }
 
@@ -201,6 +216,7 @@ export default function PortalInteractive(props: Props) {
     e.preventDefault();
     if (!draftTitle.trim() || !draftBody.trim()) return;
     setStagingDraft(true);
+    setApprovalError(null);
     try {
       const res = await fetch('/api/agents', {
         method: 'POST',
@@ -220,32 +236,61 @@ export default function PortalInteractive(props: Props) {
         setDraftChannel('');
         setDraftBody('');
         await loadTenantData(currentOrgId, domainFilter);
+      } else {
+        setApprovalError(data.error || 'Failed to stage HITL draft.');
       }
     } finally {
       setStagingDraft(false);
     }
   }
 
-  async function handleAgentDecision(runId: number, decision: 'approved' | 'rejected') {
+  async function handleAgentDecision(run: AgentRun, decision: 'approved' | 'rejected', overrideCode?: string) {
+    setApprovalError(null);
+
+    if (decision === 'approved' && needsRotatingCode(run)) {
+      const candidate = (overrideCode ?? (stepUpRunId === run.id ? rotatingCodeInput : '')).trim();
+      if (!/^\d{6}$/.test(candidate)) {
+        setStepUpRunId(run.id);
+        setRotatingCodeInput('');
+        setApprovalError(`Enter a 6-digit rotating code to approve high-risk ${run.domain_category || 'agent'} run #${run.id}.`);
+        return;
+      }
+    }
+
+    const codeToSend =
+      decision === 'approved' && needsRotatingCode(run)
+        ? (overrideCode ?? rotatingCodeInput).trim()
+        : undefined;
+
     const res = await fetch('/api/agents', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ runId, decision, reviewer: 'Founder (HITL)' }),
+      body: JSON.stringify({
+        runId: run.id,
+        decision,
+        reviewer: 'Founder (HITL)',
+        rotatingCode: codeToSend,
+      }),
     });
     const data = await res.json();
-    if (res.ok && data.run) {
-      setAgentRuns((prev) =>
-        prev.map((item) =>
-          item.id === runId
-            ? {
-                ...item,
-                approval_status: data.run.approval_status,
-                execution_status: data.run.execution_status,
-              }
-            : item
-        )
-      );
+    if (!res.ok || !data.run) {
+      setApprovalError(data.error || 'Approval request rejected.');
+      return;
     }
+
+    setStepUpRunId(null);
+    setRotatingCodeInput('');
+    setAgentRuns((prev) =>
+      prev.map((item) =>
+        item.id === run.id
+          ? {
+              ...item,
+              approval_status: data.run.approval_status,
+              execution_status: data.run.execution_status,
+            }
+          : item
+      )
+    );
   }
 
   async function handleVerifyReceipt(receipt: AuditReceipt) {
@@ -765,6 +810,12 @@ export default function PortalInteractive(props: Props) {
           </div>
         </div>
 
+        {approvalError && (
+          <div className="rounded-lg border border-rose-800 bg-rose-950/60 px-3.5 py-2.5 text-xs text-rose-300">
+            {approvalError}
+          </div>
+        )}
+
         <div className="grid gap-6 lg:grid-cols-5">
           {/* Stage HITL Draft Form */}
           <form
@@ -842,64 +893,107 @@ export default function PortalInteractive(props: Props) {
                 No agent runs or staged drafts in this domain yet.
               </div>
             ) : (
-              agentRuns.slice(0, 8).map((run) => (
-                <div
-                  key={run.id}
-                  className="flex flex-col justify-between gap-3 rounded-xl border border-slate-800/90 bg-slate-950/70 p-3.5 text-xs sm:flex-row sm:items-center"
-                >
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase text-violet-300">
-                        {run.domain_category || 'operations'}
-                      </span>
-                      <span className="font-semibold text-white">{run.agent_name}</span>
-                      <span className="text-[11px] text-slate-400">({run.agent_role})</span>
-                    </div>
-                    {run.payload_preview?.title && (
-                      <p className="font-medium text-slate-200">{run.payload_preview.title}</p>
-                    )}
-                    {run.payload_preview?.summary && (
-                      <p className="line-clamp-2 text-[11px] text-slate-400">{run.payload_preview.summary}</p>
-                    )}
-                    <p className="font-mono text-[10px] text-slate-500">
-                      {Array.isArray(run.proposed_actions) && run.proposed_actions[0]?.action
-                        ? `Action: ${run.proposed_actions[0].action} • Target: ${run.proposed_actions[0].target || 'internal'}`
-                        : `Run #${run.id} • ${run.execution_status}`}
-                    </p>
-                  </div>
+              agentRuns.slice(0, 8).map((run) => {
+                const requiresCode = needsRotatingCode(run);
+                const isPromptOpen = run.approval_status === 'pending_approval' && stepUpRunId === run.id;
 
-                  <div className="flex shrink-0 items-center gap-2">
-                    {run.approval_status === 'pending_approval' ? (
-                      <>
+                return (
+                  <div
+                    key={run.id}
+                    className="space-y-2.5 rounded-xl border border-slate-800/90 bg-slate-950/70 p-3.5 text-xs"
+                  >
+                    <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase text-violet-300">
+                            {run.domain_category || 'operations'}
+                          </span>
+                          <span className="font-semibold text-white">{run.agent_name}</span>
+                          <span className="text-[11px] text-slate-400">({run.agent_role})</span>
+                          {requiresCode && run.approval_status === 'pending_approval' && (
+                            <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                              <KeyRound className="h-3 w-3" /> 6-Digit Code
+                            </span>
+                          )}
+                        </div>
+                        {run.payload_preview?.title && (
+                          <p className="font-medium text-slate-200">{run.payload_preview.title}</p>
+                        )}
+                        {run.payload_preview?.summary && (
+                          <p className="line-clamp-2 text-[11px] text-slate-400">{run.payload_preview.summary}</p>
+                        )}
+                        <p className="font-mono text-[10px] text-slate-500">
+                          {Array.isArray(run.proposed_actions) && run.proposed_actions[0]?.action
+                            ? `Action: ${run.proposed_actions[0].action} • Target: ${run.proposed_actions[0].target || 'internal'}`
+                            : `Run #${run.id} • ${run.execution_status}`}
+                        </p>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-2">
+                        {run.approval_status === 'pending_approval' ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleAgentDecision(run, 'approved')}
+                              className="rounded-md bg-emerald-500/20 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleAgentDecision(run, 'rejected')}
+                              className="rounded-md bg-rose-500/20 px-2.5 py-1 text-[11px] font-semibold text-rose-300 ring-1 ring-rose-500/40 hover:bg-rose-500/30"
+                            >
+                              Reject
+                            </button>
+                          </>
+                        ) : (
+                          <span
+                            className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize ${
+                              run.approval_status === 'rejected'
+                                ? 'bg-rose-500/15 text-rose-300'
+                                : 'bg-emerald-500/15 text-emerald-300'
+                            }`}
+                          >
+                            {run.approval_status.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {isPromptOpen && (
+                      <div className="flex flex-wrap items-center gap-2 border-t border-slate-800/80 pt-2.5">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={6}
+                          placeholder="6-digit rotating code"
+                          value={rotatingCodeInput}
+                          onChange={(e) => setRotatingCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                          className="w-40 rounded-md border border-amber-500/40 bg-slate-900 px-2.5 py-1 font-mono text-xs text-white placeholder-slate-500 focus:border-amber-400 focus:outline-none"
+                        />
                         <button
                           type="button"
-                          onClick={() => handleAgentDecision(run.id, 'approved')}
-                          className="rounded-md bg-emerald-500/20 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30"
+                          onClick={() => handleAgentDecision(run, 'approved', rotatingCodeInput)}
+                          className="rounded-md bg-amber-500/20 px-2.5 py-1 text-[11px] font-semibold text-amber-200 ring-1 ring-amber-500/40 hover:bg-amber-500/30"
                         >
-                          Approve
+                          Verify & Approve
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleAgentDecision(run.id, 'rejected')}
-                          className="rounded-md bg-rose-500/20 px-2.5 py-1 text-[11px] font-semibold text-rose-300 ring-1 ring-rose-500/40 hover:bg-rose-500/30"
+                          onClick={() => {
+                            setStepUpRunId(null);
+                            setRotatingCodeInput('');
+                          }}
+                          className="rounded-md bg-slate-800 px-2 py-1 text-[11px] text-slate-400 hover:text-slate-200"
                         >
-                          Reject
+                          Cancel
                         </button>
-                      </>
-                    ) : (
-                      <span
-                        className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize ${
-                          run.approval_status === 'rejected'
-                            ? 'bg-rose-500/15 text-rose-300'
-                            : 'bg-emerald-500/15 text-emerald-300'
-                        }`}
-                      >
-                        {run.approval_status.replace(/_/g, ' ')}
-                      </span>
+                      </div>
                     )}
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
