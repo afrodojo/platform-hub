@@ -14,6 +14,8 @@ import {
   Database,
   ShieldAlert,
   BadgeCheck,
+  Bot,
+  Building2,
 } from 'lucide-react';
 
 interface CaseItem {
@@ -27,6 +29,7 @@ interface CaseItem {
 
 interface AuditReceipt {
   id: number | null;
+  org_id?: string | null;
   intake_uuid: string;
   client_name: string;
   division: string;
@@ -35,6 +38,32 @@ interface AuditReceipt {
   routed_endpoint: string;
   spoke_status?: string;
   status: string;
+  created_at: string;
+}
+
+interface OrgTenant {
+  id: string;
+  name: string;
+  primary_domain: string | null;
+  rd_telemetry_opt_in: boolean;
+  tier: string;
+  monthly_ron_credits: number;
+  remaining_ron_credits: number;
+  monthly_process_credits: number;
+  remaining_process_credits: number;
+  rd_lab_access: boolean;
+}
+
+interface AgentRun {
+  id: number;
+  run_uuid: string;
+  agent_name: string;
+  agent_role: string;
+  input_sha256: string;
+  proposed_actions: Array<{ action?: string; target?: string; credit_deducted?: string; reason?: string }>;
+  confidence_score: string | number | null;
+  approval_status: string;
+  execution_status: string;
   created_at: string;
 }
 
@@ -55,6 +84,10 @@ interface Props {
 }
 
 export default function PortalInteractive(props: Props) {
+  const [tenants, setTenants] = useState<OrgTenant[]>([]);
+  const [currentOrgId, setCurrentOrgId] = useState(props.orgId);
+  const [currentOrgName, setCurrentOrgName] = useState(props.orgName);
+
   const [division, setDivision] = useState<string>('cyber');
   const [title, setTitle] = useState('');
   const [payload, setPayload] = useState('');
@@ -62,6 +95,7 @@ export default function PortalInteractive(props: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [latestReceipt, setLatestReceipt] = useState<AuditReceipt | null>(null);
   const [receipts, setReceipts] = useState<AuditReceipt[]>([]);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [verifyState, setVerifyState] = useState<Record<string, 'verifying' | 'verified' | 'mismatch'>>({});
   const [cases, setCases] = useState<CaseItem[]>(props.initialCases);
   const [optIn, setOptIn] = useState(props.rdTelemetryOptIn);
@@ -75,16 +109,40 @@ export default function PortalInteractive(props: Props) {
   const [billingLoading, setBillingLoading] = useState<string | null>(null);
   const [billingBanner, setBillingBanner] = useState<string | null>(null);
 
+  async function loadTenantData(targetOrgId: string) {
+    const query = targetOrgId ? `?orgId=${encodeURIComponent(targetOrgId)}` : '';
+    const [recRes, agRes] = await Promise.all([
+      fetch(`/api/receipts${query}`).then((r) => r.json()).catch(() => ({ receipts: [] })),
+      fetch(`/api/agents${query}`).then((r) => r.json()).catch(() => ({ runs: [] })),
+    ]);
+    if (Array.isArray(recRes.receipts)) setReceipts(recRes.receipts);
+    if (Array.isArray(agRes.runs)) setAgentRuns(agRes.runs);
+  }
+
   useEffect(() => {
     let active = true;
-    fetch('/api/receipts')
+    fetch('/api/orgs')
       .then((res) => res.json())
       .then((data) => {
-        if (active && Array.isArray(data.receipts)) {
-          setReceipts(data.receipts);
+        if (!active || !Array.isArray(data.organizations) || data.organizations.length === 0) return;
+        setTenants(data.organizations);
+        const found = data.organizations.find((o: OrgTenant) => o.id === currentOrgId) || data.organizations[0];
+        if (found) {
+          setCurrentOrgId(found.id);
+          setCurrentOrgName(found.name);
+          setActiveTier(found.tier);
+          setRonMonthly(found.monthly_ron_credits);
+          setRonRemaining(found.remaining_ron_credits);
+          setProcessMonthly(found.monthly_process_credits);
+          setProcessRemaining(found.remaining_process_credits);
+          setRdLabAccess(found.rd_lab_access);
+          setOptIn(found.rd_telemetry_opt_in);
+          loadTenantData(found.id);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        loadTenantData(currentOrgId);
+      });
 
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -97,7 +155,42 @@ export default function PortalInteractive(props: Props) {
     return () => {
       active = false;
     };
-  }, [props.tier]);
+  }, []);
+
+  function handleOrgSwitch(nextOrgId: string) {
+    const selected = tenants.find((t) => t.id === nextOrgId);
+    if (!selected) return;
+    setCurrentOrgId(selected.id);
+    setCurrentOrgName(selected.name);
+    setActiveTier(selected.tier);
+    setRonMonthly(selected.monthly_ron_credits);
+    setRonRemaining(selected.remaining_ron_credits);
+    setProcessMonthly(selected.monthly_process_credits);
+    setProcessRemaining(selected.remaining_process_credits);
+    setRdLabAccess(selected.rd_lab_access);
+    setOptIn(selected.rd_telemetry_opt_in);
+    setLatestReceipt(null);
+    setBillingBanner(null);
+    loadTenantData(selected.id);
+  }
+
+  async function handleAgentDecision(runId: number, decision: 'approved' | 'rejected') {
+    const res = await fetch('/api/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId, decision, reviewer: 'Founder Console' }),
+    });
+    const data = await res.json();
+    if (res.ok && data.run) {
+      setAgentRuns((prev) =>
+        prev.map((item) =>
+          item.id === runId
+            ? { ...item, approval_status: data.run.approval_status, execution_status: data.run.execution_status }
+            : item
+        )
+      );
+    }
+  }
 
   async function handleVerifyReceipt(receipt: AuditReceipt) {
     const key = receipt.intake_uuid;
@@ -133,8 +226,8 @@ export default function PortalInteractive(props: Props) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          orgId: props.orgId,
-          orgName: props.orgName,
+          orgId: currentOrgId,
+          orgName: currentOrgName,
           division,
           title,
           payload,
@@ -144,10 +237,27 @@ export default function PortalInteractive(props: Props) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Submission failed');
 
+      if (data.credits) {
+        setRonRemaining(data.credits.remainingRon);
+        setProcessRemaining(data.credits.remainingProcess);
+        setTenants((prev) =>
+          prev.map((t) =>
+            t.id === currentOrgId
+              ? {
+                  ...t,
+                  remaining_ron_credits: data.credits.remainingRon,
+                  remaining_process_credits: data.credits.remainingProcess,
+                }
+              : t
+          )
+        );
+      }
+
       const newReceipt: AuditReceipt = {
         id: data.dbId ?? null,
+        org_id: currentOrgId,
         intake_uuid: data.intakeId || `INT-${Date.now()}`,
-        client_name: props.orgName,
+        client_name: currentOrgName,
         division,
         priority: division === 'cyber' ? 'high' : 'standard',
         sha256_receipt: data.sha256,
@@ -158,7 +268,7 @@ export default function PortalInteractive(props: Props) {
       };
 
       setLatestReceipt(newReceipt);
-      setReceipts((prev) => [newReceipt, ...prev].slice(0, 15));
+      setReceipts((prev) => [newReceipt, ...prev].slice(0, 20));
       setCases((prev) => [
         {
           id: data.caseId || data.ingestedId || newReceipt.intake_uuid,
@@ -170,6 +280,7 @@ export default function PortalInteractive(props: Props) {
         },
         ...prev,
       ]);
+      loadTenantData(currentOrgId);
       setTitle('');
       setPayload('');
     } catch (err: unknown) {
@@ -186,7 +297,7 @@ export default function PortalInteractive(props: Props) {
       const res = await fetch('/api/stripe/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tier: selectedTier, orgId: props.orgId }),
+        body: JSON.stringify({ tier: selectedTier, orgId: currentOrgId }),
       });
       const data = await res.json();
       if (data.url) {
@@ -198,7 +309,7 @@ export default function PortalInteractive(props: Props) {
         const provRes = await fetch('/api/stripe/provision', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orgId: props.orgId, tier: selectedTier }),
+          body: JSON.stringify({ orgId: currentOrgId, tier: selectedTier }),
         });
         const provData = await provRes.json();
         if (provRes.ok && provData.ok) {
@@ -227,27 +338,45 @@ export default function PortalInteractive(props: Props) {
     await fetch('/api/rd-optin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orgId: props.orgId, optIn: next }),
+      body: JSON.stringify({ orgId: currentOrgId, optIn: next }),
     });
   }
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-8">
-      {/* Top Status Bar */}
+      {/* Top Status Bar + Multi-Tenant Selector */}
       <header className="flex flex-col gap-4 border-b border-slate-800 pb-6 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-400 ring-1 ring-inset ring-emerald-500/30">
-            <Activity className="h-3.5 w-3.5" /> Unified Hub Active • {props.orgName}
+            <Activity className="h-3.5 w-3.5" /> Unified Hub Active • {currentOrgName}
           </span>
           <h1 className="mt-2 text-2xl font-bold tracking-tight text-white sm:text-3xl">
             SMB Cyber, Legal & Applied R&D Readiness Portal
           </h1>
         </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3 text-right">
-          <p className="text-xs uppercase tracking-wider text-slate-400">Active Subscription</p>
-          <p className="text-lg font-semibold capitalize text-emerald-400">
-            {activeTier.replace(/_/g, ' ')}
-          </p>
+        <div className="flex flex-wrap items-center gap-3">
+          {tenants.length > 0 && (
+            <label className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2 text-xs text-slate-300">
+              <Building2 className="h-4 w-4 text-sky-400" />
+              <select
+                value={currentOrgId}
+                onChange={(e) => handleOrgSwitch(e.target.value)}
+                className="bg-transparent font-medium text-white focus:outline-none"
+              >
+                {tenants.map((t) => (
+                  <option key={t.id} value={t.id} className="bg-slate-900 text-white">
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-2.5 text-right">
+            <p className="text-[11px] uppercase tracking-wider text-slate-400">Active Subscription</p>
+            <p className="text-sm font-semibold capitalize text-emerald-400">
+              {activeTier.replace(/_/g, ' ')}
+            </p>
+          </div>
         </div>
       </header>
 
@@ -295,7 +424,7 @@ export default function PortalInteractive(props: Props) {
             </div>
           </div>
           <p className="mt-3 text-xs text-slate-400">
-            SHA-256 Tamper-Evident Evidence Vault & Priority Dispatch Ready
+            Atomic PostgreSQL Credit Deduction on Notary & Process Filings
           </p>
         </div>
 
@@ -326,7 +455,7 @@ export default function PortalInteractive(props: Props) {
         </div>
       </section>
 
-      {/* Main Workspace: Smart Multi-Division Intake + Collaborative Queue & Postgres Receipts */}
+      {/* Main Workspace: Smart Multi-Division Intake + Collaborative Queue, Audit Ledger & Agent Approvals */}
       <section className="grid gap-6 lg:grid-cols-5">
         <form
           onSubmit={handleIngest}
@@ -337,7 +466,7 @@ export default function PortalInteractive(props: Props) {
             <h2 className="text-lg font-semibold text-white">Smart Multi-Division Intake</h2>
           </div>
           <p className="text-xs text-slate-400">
-            Attested via C++20 OpenSSL, forwarded to the target division spoke by n8n, and persisted in PostgreSQL.
+            Attested via C++20 OpenSSL, routed by n8n, logged with agent triage, and persisted in PostgreSQL.
           </p>
 
           <div>
@@ -364,7 +493,7 @@ export default function PortalInteractive(props: Props) {
             <input
               type="text"
               required
-              placeholder="e.g., Scan portal.company.com or Serve Subpoena #402"
+              placeholder="e.g., Notarize Affidavit or Serve Subpoena #402"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
@@ -482,7 +611,7 @@ export default function PortalInteractive(props: Props) {
                 <Database className="h-5 w-5 text-emerald-400" />
                 <h2 className="text-lg font-semibold text-white">PostgreSQL Cryptographic Audit Ledger</h2>
               </div>
-              <span className="text-xs text-slate-400">{receipts.length} persisted receipts</span>
+              <span className="text-xs text-slate-400">{receipts.length} tenant receipts</span>
             </div>
 
             <div className="mt-4 overflow-x-auto">
@@ -501,7 +630,7 @@ export default function PortalInteractive(props: Props) {
                   {receipts.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="py-4 text-center font-sans text-slate-500">
-                        No persisted receipts yet.
+                        No persisted receipts for this organization yet.
                       </td>
                     </tr>
                   ) : (
@@ -544,6 +673,80 @@ export default function PortalInteractive(props: Props) {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          {/* Agentic Operations & Human-in-the-Loop Approval Gate */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Bot className="h-5 w-5 text-violet-400" />
+                <h2 className="text-lg font-semibold text-white">Agentic Triage & HITL Approval Gate</h2>
+              </div>
+              <span className="text-xs text-slate-400">{agentRuns.length} audited runs</span>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {agentRuns.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-800 p-5 text-center text-xs text-slate-400">
+                  No agent triage runs logged yet.
+                </div>
+              ) : (
+                agentRuns.slice(0, 6).map((run) => (
+                  <div
+                    key={run.id}
+                    className="flex flex-col justify-between gap-3 rounded-xl border border-slate-800/80 bg-slate-950/70 p-3.5 text-xs sm:flex-row sm:items-center"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-white">{run.agent_name}</span>
+                        <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">
+                          {run.agent_role}
+                        </span>
+                        <span className="font-mono text-[10px] text-slate-400">
+                          conf: {run.confidence_score ?? '0.96'}
+                        </span>
+                      </div>
+                      <p className="font-mono text-[11px] text-slate-400">
+                        {Array.isArray(run.proposed_actions) && run.proposed_actions[0]?.action
+                          ? `Action: ${run.proposed_actions[0].action} (${run.proposed_actions[0].target || 'internal'})`
+                          : `Run #${run.id} • ${run.execution_status}`}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {run.approval_status === 'pending_approval' ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleAgentDecision(run.id, 'approved')}
+                            className="rounded-md bg-emerald-500/20 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleAgentDecision(run.id, 'rejected')}
+                            className="rounded-md bg-rose-500/20 px-2.5 py-1 text-[11px] font-semibold text-rose-300 ring-1 ring-rose-500/40 hover:bg-rose-500/30"
+                          >
+                            Reject
+                          </button>
+                        </>
+                      ) : (
+                        <span
+                          className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize ${
+                            run.approval_status === 'rejected'
+                              ? 'bg-rose-500/15 text-rose-300'
+                              : 'bg-emerald-500/15 text-emerald-300'
+                          }`}
+                        >
+                          {run.approval_status.replace(/_/g, ' ')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
