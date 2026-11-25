@@ -1,0 +1,159 @@
+{
+  "name": "EDS-360 SMB Operations, Marketing, Compliance & Training Ingest",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "eds360-smb-events",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "b7c0e1a4-2d9f-4c81-9a3b-102938475601",
+      "name": "SMB Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        220
+      ],
+      "webhookId": "eds360-smb-events-webhook"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "b7c0e1a4-2d9f-4c81-9a3b-102938475602",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SMB_FEED_POLL_URL || '' }}",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "b7c0e1a4-2d9f-4c81-9a3b-102938475603",
+      "name": "Poll Optional SMB Feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        440
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawInput = $input.item.json || {};\nconst payload = rawInput.body && typeof rawInput.body === 'object' ? rawInput.body : rawInput;\n\nif (payload.error && !payload.events && !payload.stream) {\n  return [];\n}\n\nconst events = Array.isArray(payload.events) ? payload.events : [payload];\nconst defaultTenantId = String(payload.tenantId || $env.DEFAULT_TENANT_ID || 'eds-360');\nconst defaultTenantName = String(payload.tenantName || 'EDS-360 / Emerging Defense Solutions');\n\nconst streamMap = {\n  operations:   { scope: 'department', key: 'operations',          role: 'department_lead', department: 'operations', label: 'Operations & HITL' },\n  ops:          { scope: 'department', key: 'operations',          role: 'department_lead', department: 'operations', label: 'Operations & HITL' },\n  marketing:    { scope: 'department', key: 'marketing',           role: 'department_lead', department: 'marketing',  label: 'Marketing & Growth' },\n  training:     { scope: 'department', key: 'hr',                  role: 'department_lead', department: 'hr',         label: 'Workforce & Training' },\n  hr:           { scope: 'department', key: 'hr',                  role: 'department_lead', department: 'hr',         label: 'Workforce & Training' },\n  compliance:   { scope: 'it',         key: 'compliance_analysts', role: 'cyber_soc_lead',  department: 'cyber_soc',  label: 'Compliance & Audit' }\n};\n\nconst out = [];\nfor (const ev of events) {\n  if (!ev || typeof ev !== 'object') continue;\n  const rawStream = String(ev.stream || ev.domain || ev.category || 'operations').trim().toLowerCase();\n  const cfg = streamMap[rawStream] || streamMap.operations;\n  const tenantId = String(ev.tenantId || defaultTenantId);\n  const tenantName = String(ev.tenantName || defaultTenantName);\n  const ref = String(ev.ref || `SMB-${rawStream.toUpperCase()}-01`);\n  const owner = String(ev.owner || `${cfg.label} Lead`);\n  const detail = String(ev.detail || ev.summary || `${cfg.label} event ingested via n8n`);\n  const status = String(ev.status || 'compliant');\n\n  const kpis = Array.isArray(ev.kpis) && ev.kpis.length > 0 ? ev.kpis : [\n    { label: `${cfg.label} Stream`, value: 'Active', sub: `Tenant ${tenantId}`, accent: 'text-emerald-300' },\n    { label: 'Last Event Ref', value: ref, sub: owner, accent: 'text-cyan-300' },\n    { label: 'Posture Status', value: status, sub: 'n8n normalized sync', accent: status === 'compliant' ? 'text-emerald-300' : 'text-amber-300' },\n    { label: 'Audit Attestation', value: 'SHA-256', sub: 'CMMC L2 / CDM ready', accent: 'text-indigo-300' }\n  ];\n\n  const items = Array.isArray(ev.items) && ev.items.length > 0 ? ev.items : [\n    { ref, owner, detail, status }\n  ];\n\n  out.push({\n    json: {\n      hubPayload: {\n        tenantId,\n        tenantName,\n        scope: ev.scope || cfg.scope,\n        key: ev.key || cfg.key,\n        sourceLabel: String(ev.sourceLabel || `n8n-smb-${rawStream}`),\n        kpis,\n        items\n      },\n      rbacHeaders: {\n        role: String(ev.role || cfg.role),\n        department: String(ev.department || cfg.department)\n      }\n    }\n  });\n}\n\nreturn out;"
+      },
+      "id": "b7c0e1a4-2d9f-4c81-9a3b-102938475604",
+      "name": "Normalize SMB Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.HUB_INTERNAL_URL || 'http://hub-web:3000' }}/api/admin/functions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-User-Role",
+              "value": "={{ $json.rbacHeaders.role }}"
+            },
+            {
+              "name": "X-User-Department",
+              "value": "={{ $json.rbacHeaders.department }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.hubPayload) }}",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "b7c0e1a4-2d9f-4c81-9a3b-102938475605",
+      "name": "Push to Platform Hub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "SMB Event Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize SMB Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Poll Optional SMB Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll Optional SMB Feed": {
+      "main": [
+        [
+          {
+            "node": "Normalize SMB Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize SMB Events": {
+      "main": [
+        [
+          {
+            "node": "Push to Platform Hub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
