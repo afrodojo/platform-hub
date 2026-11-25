@@ -1,32 +1,83 @@
 import { NextRequest, NextResponse } from 'next/server';
+import crypto from 'crypto';
 import { pool } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
+const ALLOWED_DOMAINS = new Set([
+  'subscriptions',
+  'seo',
+  'marketing',
+  'social',
+  'infra',
+  'operations',
+]);
+
+const DOMAIN_AGENT_MAP: Record<string, { name: string; role: string; defaultAction: string }> = {
+  subscriptions: {
+    name: 'BillingOpsAgent',
+    role: 'Subscription & Credit Specialist',
+    defaultAction: 'review_tier_or_credit_adjustment',
+  },
+  seo: {
+    name: 'SeoGrowthAgent',
+    role: 'Technical & Search Growth Specialist',
+    defaultAction: 'publish_seo_metadata_or_brief',
+  },
+  marketing: {
+    name: 'CampaignAgent',
+    role: 'Demand & Funnel Specialist',
+    defaultAction: 'launch_campaign_or_outreach_batch',
+  },
+  social: {
+    name: 'SocialMediaAgent',
+    role: 'Channel & Distribution Specialist',
+    defaultAction: 'publish_social_post',
+  },
+  infra: {
+    name: 'InfraScaleAgent',
+    role: 'Infrastructure & Capacity Specialist',
+    defaultAction: 'scale_or_recreate_service',
+  },
+  operations: {
+    name: 'ChiefOfStaffAgent',
+    role: 'Executive Chief of Staff',
+    defaultAction: 'execute_operational_task',
+  },
+};
+
 export async function GET(req: NextRequest) {
   try {
     const orgId = (req.nextUrl.searchParams.get('orgId') || '').trim();
+    const domain = (req.nextUrl.searchParams.get('domain') || '').trim().toLowerCase();
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-    const runsRes = uuidRegex.test(orgId)
-      ? await pool.query(
-          `SELECT id, run_uuid, org_id, intake_id, agent_name, agent_role, trigger_source, model_name,
-                  input_sha256, output_sha256, proposed_actions, confidence_score,
-                  approval_status, approved_by, approved_at, execution_status, created_at
-           FROM agent_audit_runs
-           WHERE org_id = $1
-           ORDER BY id DESC
-           LIMIT 15`,
-          [orgId]
-        )
-      : await pool.query(
-          `SELECT id, run_uuid, org_id, intake_id, agent_name, agent_role, trigger_source, model_name,
-                  input_sha256, output_sha256, proposed_actions, confidence_score,
-                  approval_status, approved_by, approved_at, execution_status, created_at
-           FROM agent_audit_runs
-           ORDER BY id DESC
-           LIMIT 15`
-        );
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (uuidRegex.test(orgId)) {
+      params.push(orgId);
+      conditions.push(`org_id = $${params.length}`);
+    }
+
+    if (domain && domain !== 'all' && ALLOWED_DOMAINS.has(domain)) {
+      params.push(domain);
+      conditions.push(`domain_category = $${params.length}`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const runsRes = await pool.query(
+      `SELECT id, run_uuid, org_id, intake_id, domain_category, agent_name, agent_role,
+              trigger_source, model_name, input_sha256, output_sha256,
+              proposed_actions, payload_preview, confidence_score,
+              approval_status, approved_by, approved_at, execution_status, created_at
+       FROM agent_audit_runs
+       ${whereClause}
+       ORDER BY id DESC
+       LIMIT 25`,
+      params
+    );
 
     return NextResponse.json({ runs: runsRes.rows });
   } catch (err) {
@@ -37,12 +88,71 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { runId, decision, reviewer } = await req.json();
+    const body = await req.json();
+
+    // Mode 1: Stage a new HITL draft for subscriptions, seo, marketing, social, or infra
+    if (body.action === 'stage_draft') {
+      const rawDomain = typeof body.domainCategory === 'string' ? body.domainCategory.trim().toLowerCase() : 'operations';
+      const domainCategory = ALLOWED_DOMAINS.has(rawDomain) ? rawDomain : 'operations';
+      const title = typeof body.title === 'string' ? body.title.trim().slice(0, 160) : '';
+      const draftBody = typeof body.draftBody === 'string' ? body.draftBody.trim().slice(0, 4000) : '';
+      const targetChannel = typeof body.targetChannel === 'string' ? body.targetChannel.trim().slice(0, 120) : '';
+      const orgId = typeof body.orgId === 'string' && body.orgId.trim() ? body.orgId.trim() : null;
+
+      if (!title || !draftBody) {
+        return NextResponse.json({ error: 'Draft title and content are required.' }, { status: 400 });
+      }
+
+      const meta = DOMAIN_AGENT_MAP[domainCategory] || DOMAIN_AGENT_MAP.operations;
+      const previewObj = {
+        title,
+        targetChannel: targetChannel || domainCategory,
+        summary: draftBody,
+        stagedAt: new Date().toISOString(),
+      };
+      const inputSha256 = crypto.createHash('sha256').update(JSON.stringify({ domainCategory, title, draftBody })).digest('hex');
+      const outputSha256 = crypto.createHash('sha256').update(JSON.stringify(previewObj)).digest('hex');
+      const proposedActions = [
+        {
+          action: meta.defaultAction,
+          target: targetChannel || domainCategory,
+          reason: title,
+        },
+      ];
+
+      const inserted = await pool.query(
+        `INSERT INTO agent_audit_runs (
+           org_id, domain_category, agent_name, agent_role, trigger_source, model_name,
+           input_sha256, output_sha256, tool_calls, proposed_actions, payload_preview,
+           confidence_score, approval_status, execution_status
+         )
+         VALUES ($1, $2, $3, $4, 'founder_hitl_draft', 'hitl-drafter-v1', $5, $6, '[]'::jsonb, $7::jsonb, $8::jsonb, 0.920, 'pending_approval', 'staged_for_review')
+         RETURNING id, run_uuid, org_id, intake_id, domain_category, agent_name, agent_role,
+                   trigger_source, model_name, input_sha256, output_sha256,
+                   proposed_actions, payload_preview, confidence_score,
+                   approval_status, approved_by, approved_at, execution_status, created_at`,
+        [
+          orgId,
+          domainCategory,
+          meta.name,
+          meta.role,
+          inputSha256,
+          outputSha256,
+          JSON.stringify(proposedActions),
+          JSON.stringify(previewObj),
+        ]
+      );
+
+      return NextResponse.json({ ok: true, run: inserted.rows[0] }, { status: 201 });
+    }
+
+    // Mode 2: Human-in-the-loop approval or rejection decision
+    const { runId, decision, reviewer } = body;
     if (!runId || (decision !== 'approved' && decision !== 'rejected')) {
       return NextResponse.json({ error: 'Valid runId and decision (approved|rejected) required.' }, { status: 400 });
     }
 
-    const nextExecStatus = decision === 'approved' ? 'executed' : 'blocked';
+    const nextExecStatus = decision === 'approved' ? 'approved_for_execution' : 'blocked_by_reviewer';
     const updated = await pool.query(
       `UPDATE agent_audit_runs
        SET approval_status = $1,
@@ -51,7 +161,10 @@ export async function POST(req: NextRequest) {
            approved_at = NOW(),
            updated_at = NOW()
        WHERE id = $4
-       RETURNING id, run_uuid, agent_name, approval_status, execution_status, approved_by, approved_at`,
+       RETURNING id, run_uuid, org_id, intake_id, domain_category, agent_name, agent_role,
+                 trigger_source, model_name, input_sha256, output_sha256,
+                 proposed_actions, payload_preview, confidence_score,
+                 approval_status, approved_by, approved_at, execution_status, created_at`,
       [decision, nextExecStatus, typeof reviewer === 'string' && reviewer.trim() ? reviewer.trim() : 'Founder (HITL)', runId]
     );
 
@@ -61,7 +174,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, run: updated.rows[0] });
   } catch (err) {
-    console.error('Failed to update agent approval status:', err);
-    return NextResponse.json({ error: 'Failed to update approval.' }, { status: 500 });
+    console.error('Failed to process /api/agents request:', err);
+    return NextResponse.json({ error: 'Failed to process agent action.' }, { status: 500 });
   }
 }

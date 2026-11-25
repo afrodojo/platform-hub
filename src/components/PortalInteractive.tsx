@@ -16,6 +16,7 @@ import {
   BadgeCheck,
   Bot,
   Building2,
+  PlusCircle,
 } from 'lucide-react';
 
 interface CaseItem {
@@ -57,10 +58,12 @@ interface OrgTenant {
 interface AgentRun {
   id: number;
   run_uuid: string;
+  domain_category?: string;
   agent_name: string;
   agent_role: string;
   input_sha256: string;
   proposed_actions: Array<{ action?: string; target?: string; credit_deducted?: string; reason?: string }>;
+  payload_preview?: { title?: string; targetChannel?: string; summary?: string } | null;
   confidence_score: string | number | null;
   approval_status: string;
   execution_status: string;
@@ -83,6 +86,8 @@ interface Props {
   initialCases: CaseItem[];
 }
 
+const HITL_DOMAINS = ['all', 'subscriptions', 'seo', 'marketing', 'social', 'infra', 'operations'] as const;
+
 export default function PortalInteractive(props: Props) {
   const [tenants, setTenants] = useState<OrgTenant[]>([]);
   const [currentOrgId, setCurrentOrgId] = useState(props.orgId);
@@ -95,7 +100,15 @@ export default function PortalInteractive(props: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [latestReceipt, setLatestReceipt] = useState<AuditReceipt | null>(null);
   const [receipts, setReceipts] = useState<AuditReceipt[]>([]);
+
+  const [domainFilter, setDomainFilter] = useState<string>('all');
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [draftDomain, setDraftDomain] = useState<string>('social');
+  const [draftTitle, setDraftTitle] = useState('');
+  const [draftChannel, setDraftChannel] = useState('');
+  const [draftBody, setDraftBody] = useState('');
+  const [stagingDraft, setStagingDraft] = useState(false);
+
   const [verifyState, setVerifyState] = useState<Record<string, 'verifying' | 'verified' | 'mismatch'>>({});
   const [cases, setCases] = useState<CaseItem[]>(props.initialCases);
   const [optIn, setOptIn] = useState(props.rdTelemetryOptIn);
@@ -109,11 +122,16 @@ export default function PortalInteractive(props: Props) {
   const [billingLoading, setBillingLoading] = useState<string | null>(null);
   const [billingBanner, setBillingBanner] = useState<string | null>(null);
 
-  async function loadTenantData(targetOrgId: string) {
-    const query = targetOrgId ? `?orgId=${encodeURIComponent(targetOrgId)}` : '';
+  async function loadTenantData(targetOrgId: string, targetDomain = domainFilter) {
+    const recQuery = targetOrgId ? `?orgId=${encodeURIComponent(targetOrgId)}` : '';
+    const agParams = new URLSearchParams();
+    if (targetOrgId) agParams.set('orgId', targetOrgId);
+    if (targetDomain && targetDomain !== 'all') agParams.set('domain', targetDomain);
+    const agQuery = agParams.toString() ? `?${agParams.toString()}` : '';
+
     const [recRes, agRes] = await Promise.all([
-      fetch(`/api/receipts${query}`).then((r) => r.json()).catch(() => ({ receipts: [] })),
-      fetch(`/api/agents${query}`).then((r) => r.json()).catch(() => ({ runs: [] })),
+      fetch(`/api/receipts${recQuery}`).then((r) => r.json()).catch(() => ({ receipts: [] })),
+      fetch(`/api/agents${agQuery}`).then((r) => r.json()).catch(() => ({ runs: [] })),
     ]);
     if (Array.isArray(recRes.receipts)) setReceipts(recRes.receipts);
     if (Array.isArray(agRes.runs)) setAgentRuns(agRes.runs);
@@ -137,11 +155,11 @@ export default function PortalInteractive(props: Props) {
           setProcessRemaining(found.remaining_process_credits);
           setRdLabAccess(found.rd_lab_access);
           setOptIn(found.rd_telemetry_opt_in);
-          loadTenantData(found.id);
+          loadTenantData(found.id, domainFilter);
         }
       })
       .catch(() => {
-        loadTenantData(currentOrgId);
+        loadTenantData(currentOrgId, domainFilter);
       });
 
     if (typeof window !== 'undefined') {
@@ -171,21 +189,59 @@ export default function PortalInteractive(props: Props) {
     setOptIn(selected.rd_telemetry_opt_in);
     setLatestReceipt(null);
     setBillingBanner(null);
-    loadTenantData(selected.id);
+    loadTenantData(selected.id, domainFilter);
+  }
+
+  function handleDomainTab(nextDomain: string) {
+    setDomainFilter(nextDomain);
+    loadTenantData(currentOrgId, nextDomain);
+  }
+
+  async function handleStageDraft(e: React.FormEvent) {
+    e.preventDefault();
+    if (!draftTitle.trim() || !draftBody.trim()) return;
+    setStagingDraft(true);
+    try {
+      const res = await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'stage_draft',
+          orgId: currentOrgId,
+          domainCategory: draftDomain,
+          title: draftTitle,
+          targetChannel: draftChannel,
+          draftBody,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.run) {
+        setDraftTitle('');
+        setDraftChannel('');
+        setDraftBody('');
+        await loadTenantData(currentOrgId, domainFilter);
+      }
+    } finally {
+      setStagingDraft(false);
+    }
   }
 
   async function handleAgentDecision(runId: number, decision: 'approved' | 'rejected') {
     const res = await fetch('/api/agents', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ runId, decision, reviewer: 'Founder Console' }),
+      body: JSON.stringify({ runId, decision, reviewer: 'Founder (HITL)' }),
     });
     const data = await res.json();
     if (res.ok && data.run) {
       setAgentRuns((prev) =>
         prev.map((item) =>
           item.id === runId
-            ? { ...item, approval_status: data.run.approval_status, execution_status: data.run.execution_status }
+            ? {
+                ...item,
+                approval_status: data.run.approval_status,
+                execution_status: data.run.execution_status,
+              }
             : item
         )
       );
@@ -280,7 +336,7 @@ export default function PortalInteractive(props: Props) {
         },
         ...prev,
       ]);
-      loadTenantData(currentOrgId);
+      await loadTenantData(currentOrgId, domainFilter);
       setTitle('');
       setPayload('');
     } catch (err: unknown) {
@@ -455,7 +511,7 @@ export default function PortalInteractive(props: Props) {
         </div>
       </section>
 
-      {/* Main Workspace: Smart Multi-Division Intake + Collaborative Queue, Audit Ledger & Agent Approvals */}
+      {/* Main Workspace: Smart Multi-Division Intake + Collaborative Queue & Audit Ledger */}
       <section className="grid gap-6 lg:grid-cols-5">
         <form
           onSubmit={handleIngest}
@@ -675,79 +731,176 @@ export default function PortalInteractive(props: Props) {
               </table>
             </div>
           </div>
+        </div>
+      </section>
 
-          {/* Agentic Operations & Human-in-the-Loop Approval Gate */}
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Bot className="h-5 w-5 text-violet-400" />
-                <h2 className="text-lg font-semibold text-white">Agentic Triage & HITL Approval Gate</h2>
+      {/* Enterprise HITL Command Center: Stage Drafts & Approve/Reject Across Domains */}
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6 space-y-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <Bot className="h-5 w-5 text-violet-400" />
+            <div>
+              <h2 className="text-lg font-semibold text-white">Enterprise HITL Command & Draft Gate</h2>
+              <p className="text-xs text-slate-400">
+                Stage and review proposed agent actions across subscriptions, SEO, marketing, social, and infrastructure.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            {HITL_DOMAINS.map((dom) => (
+              <button
+                key={dom}
+                type="button"
+                onClick={() => handleDomainTab(dom)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-medium capitalize transition ${
+                  domainFilter === dom
+                    ? 'bg-violet-500/25 text-violet-200 ring-1 ring-violet-500/50'
+                    : 'bg-slate-800/80 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                }`}
+              >
+                {dom}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-5">
+          {/* Stage HITL Draft Form */}
+          <form
+            onSubmit={handleStageDraft}
+            className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4 lg:col-span-2"
+          >
+            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-violet-300">
+              <PlusCircle className="h-4 w-4" /> Stage Proposed Agent Action
+            </div>
+
+            <div>
+              <label className="block text-[11px] text-slate-400">Domain Category</label>
+              <select
+                value={draftDomain}
+                onChange={(e) => setDraftDomain(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-white focus:border-violet-500 focus:outline-none"
+              >
+                <option value="subscriptions">Subscriptions & Credits</option>
+                <option value="seo">SEO & Search Metadata</option>
+                <option value="marketing">Marketing & Funnels</option>
+                <option value="social">Social Media Queue</option>
+                <option value="infra">Infrastructure & Scaling</option>
+                <option value="operations">Operations & Chief of Staff</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] text-slate-400">Action Title</label>
+              <input
+                type="text"
+                required
+                placeholder="e.g., Publish CMMC L2 LinkedIn Brief or Scale Worker"
+                value={draftTitle}
+                onChange={(e) => setDraftTitle(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] text-slate-400">Target Channel / Service (Optional)</label>
+              <input
+                type="text"
+                placeholder="e.g., LinkedIn / X / /cyber / n8n-worker"
+                value={draftChannel}
+                onChange={(e) => setDraftChannel(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] text-slate-400">Draft Payload / Rationale</label>
+              <textarea
+                rows={3}
+                required
+                placeholder="Enter post copy, SEO tags, campaign summary, or scaling justification..."
+                value={draftBody}
+                onChange={(e) => setDraftBody(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={stagingDraft}
+              className="w-full rounded-lg bg-violet-500/20 px-3 py-2 text-xs font-semibold text-violet-200 ring-1 ring-violet-500/40 transition hover:bg-violet-500/30 disabled:opacity-50"
+            >
+              {stagingDraft ? 'Staging Draft...' : 'Stage for HITL Approval'}
+            </button>
+          </form>
+
+          {/* Pending & Audited Runs List */}
+          <div className="space-y-3 lg:col-span-3">
+            {agentRuns.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-800 p-8 text-center text-xs text-slate-400">
+                No agent runs or staged drafts in this domain yet.
               </div>
-              <span className="text-xs text-slate-400">{agentRuns.length} audited runs</span>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {agentRuns.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-800 p-5 text-center text-xs text-slate-400">
-                  No agent triage runs logged yet.
-                </div>
-              ) : (
-                agentRuns.slice(0, 6).map((run) => (
-                  <div
-                    key={run.id}
-                    className="flex flex-col justify-between gap-3 rounded-xl border border-slate-800/80 bg-slate-950/70 p-3.5 text-xs sm:flex-row sm:items-center"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-semibold text-white">{run.agent_name}</span>
-                        <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">
-                          {run.agent_role}
-                        </span>
-                        <span className="font-mono text-[10px] text-slate-400">
-                          conf: {run.confidence_score ?? '0.96'}
-                        </span>
-                      </div>
-                      <p className="font-mono text-[11px] text-slate-400">
-                        {Array.isArray(run.proposed_actions) && run.proposed_actions[0]?.action
-                          ? `Action: ${run.proposed_actions[0].action} (${run.proposed_actions[0].target || 'internal'})`
-                          : `Run #${run.id} • ${run.execution_status}`}
-                      </p>
+            ) : (
+              agentRuns.slice(0, 8).map((run) => (
+                <div
+                  key={run.id}
+                  className="flex flex-col justify-between gap-3 rounded-xl border border-slate-800/90 bg-slate-950/70 p-3.5 text-xs sm:flex-row sm:items-center"
+                >
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase text-violet-300">
+                        {run.domain_category || 'operations'}
+                      </span>
+                      <span className="font-semibold text-white">{run.agent_name}</span>
+                      <span className="text-[11px] text-slate-400">({run.agent_role})</span>
                     </div>
-
-                    <div className="flex items-center gap-2">
-                      {run.approval_status === 'pending_approval' ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => handleAgentDecision(run.id, 'approved')}
-                            className="rounded-md bg-emerald-500/20 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30"
-                          >
-                            Approve
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleAgentDecision(run.id, 'rejected')}
-                            className="rounded-md bg-rose-500/20 px-2.5 py-1 text-[11px] font-semibold text-rose-300 ring-1 ring-rose-500/40 hover:bg-rose-500/30"
-                          >
-                            Reject
-                          </button>
-                        </>
-                      ) : (
-                        <span
-                          className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize ${
-                            run.approval_status === 'rejected'
-                              ? 'bg-rose-500/15 text-rose-300'
-                              : 'bg-emerald-500/15 text-emerald-300'
-                          }`}
-                        >
-                          {run.approval_status.replace(/_/g, ' ')}
-                        </span>
-                      )}
-                    </div>
+                    {run.payload_preview?.title && (
+                      <p className="font-medium text-slate-200">{run.payload_preview.title}</p>
+                    )}
+                    {run.payload_preview?.summary && (
+                      <p className="line-clamp-2 text-[11px] text-slate-400">{run.payload_preview.summary}</p>
+                    )}
+                    <p className="font-mono text-[10px] text-slate-500">
+                      {Array.isArray(run.proposed_actions) && run.proposed_actions[0]?.action
+                        ? `Action: ${run.proposed_actions[0].action} • Target: ${run.proposed_actions[0].target || 'internal'}`
+                        : `Run #${run.id} • ${run.execution_status}`}
+                    </p>
                   </div>
-                ))
-              )}
-            </div>
+
+                  <div className="flex shrink-0 items-center gap-2">
+                    {run.approval_status === 'pending_approval' ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleAgentDecision(run.id, 'approved')}
+                          className="rounded-md bg-emerald-500/20 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAgentDecision(run.id, 'rejected')}
+                          className="rounded-md bg-rose-500/20 px-2.5 py-1 text-[11px] font-semibold text-rose-300 ring-1 ring-rose-500/40 hover:bg-rose-500/30"
+                        >
+                          Reject
+                        </button>
+                      </>
+                    ) : (
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize ${
+                          run.approval_status === 'rejected'
+                            ? 'bg-rose-500/15 text-rose-300'
+                            : 'bg-emerald-500/15 text-emerald-300'
+                        }`}
+                      >
+                        {run.approval_status.replace(/_/g, ' ')}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </section>
