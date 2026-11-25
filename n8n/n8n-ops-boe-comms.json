@@ -1,0 +1,53 @@
+{
+  "name": "EDS-360 Customer Email, BoE, SOP/WI & Marketing Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "eds360-ops-comms",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "Webhook_OpsComms",
+      "name": "Email / BoE / SOP / Social Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.body || $input.first().json;\nconst kind = String(raw.kind || 'operations').toLowerCase();\nconst isMarketing = kind === 'marketing' || kind === 'social';\n\nreturn [{\n  json: {\n    tenantId: raw.tenantId || 'eds-360',\n    scope: 'department',\n    key: isMarketing ? 'marketing' : 'operations',\n    sourceLabel: raw.sourceLabel || `n8n-${kind}`,\n    kpis: Array.isArray(raw.kpis) ? raw.kpis : [\n      { label: 'Active Queue', value: String(raw.queueCount ?? 1), sub: `Stream: ${kind}`, accent: 'text-cyan-300' },\n      { label: 'BoE / SOP / Post State', value: raw.state || 'Stamped', sub: 'Audit & review tracked', accent: 'text-emerald-300' },\n      { label: 'HITL Gate', value: 'Required', sub: 'Human sign-off before send/post', accent: 'text-amber-300' },\n      { label: 'Last Sync', value: new Date().toISOString().slice(11, 19) + 'Z', sub: 'Automated ingest', accent: 'text-indigo-300' }\n    ],\n    items: Array.isArray(raw.items) && raw.items.length > 0 ? raw.items : [\n      {\n        ref: raw.ref || `${kind.toUpperCase()}-${Date.now().toString().slice(-4)}`,\n        owner: raw.owner || (isMarketing ? 'Marketing & Legal' : 'Ops & BoE Lead'),\n        detail: raw.detail || `${kind} item staged for review (AU.L2-3.3.1)`,\n        status: raw.itemStatus || 'pending_approval'\n      }\n    ]\n  }\n}];"
+      },
+      "id": "Code_FormatOpsComms",
+      "name": "Format Ops / BoE / Marketing Item",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hub.eds-360.com/api/admin/functions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "id": "Http_PostOpsComms",
+      "name": "Send to Platform Hub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300]
+    }
+  ],
+  "connections": {
+    "Email / BoE / SOP / Social Webhook": {
+      "main": [[{ "node": "Format Ops / BoE / Marketing Item", "type": "main", "index": 0 }]]
+    },
+    "Format Ops / BoE / Marketing Item": {
+      "main": [[{ "node": "Send to Platform Hub", "type": "main", "index": 0 }]]
+    }
+  }
+}

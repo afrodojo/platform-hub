@@ -1,0 +1,101 @@
+{
+  "version": "2026.11-soc-noc-rbac",
+  "departments": {
+    "executive": { "label": "Executive Leadership", "scope": "executive" },
+    "cyber_soc": { "label": "Cybersecurity Operations & SOC", "scope": "it" },
+    "noc": { "label": "Network Operations Center (NOC)", "scope": "it" },
+    "it": { "label": "IT & Platform Engineering", "scope": "it" },
+    "finance": { "label": "Finance & Contracts", "scope": "department" },
+    "pmo": { "label": "PMO & Delivery", "scope": "department" },
+    "hr": { "label": "People & Talent", "scope": "department" },
+    "legal": { "label": "Legal & Compliance", "scope": "department" },
+    "marketing": { "label": "Marketing & Briefings", "scope": "department" },
+    "physical_security": { "label": "Physical Security", "scope": "department" }
+  },
+  "operational_capabilities": {
+    "cyber_soc": {
+      "division": "Cybersecurity / SOC",
+      "controls": ["SI.L2-3.14.1", "AU.L2-3.3.1", "IR.L2-3.6.1", "IR.L2-3.6.2"],
+      "streams": ["wazuh-siem", "ueba-fim", "soc-alert-triage", "hitl-sha256-attestation"]
+    },
+    "noc": {
+      "division": "Network Operations Center (NOC)",
+      "controls": ["AC.L2-3.1.1", "SC.L2-3.13.1", "SI.L2-3.14.1", "MA.L2-3.7.1"],
+      "streams": ["caddy-ingress", "cloudflare-tunnel", "vlan-10-20-routing", "container-redis-pg-health", "repo-9-site-probes"]
+    }
+  },
+  "roles": {
+    "executive_sponsor": {
+      "scopes": ["*"],
+      "keys": ["*"],
+      "can_ingest": true,
+      "can_intelligence": true,
+      "can_approve": true,
+      "can_dispatch": true,
+      "can_read_audit": true
+    },
+    "cyber_soc_lead": {
+      "scopes": ["it"],
+      "keys": ["devsecops", "compliance_analysts", "cyber_soc"],
+      "can_ingest": true,
+      "can_intelligence": true,
+      "can_approve": true,
+      "can_dispatch": true,
+      "can_read_audit": true
+    },
+    "soc_analyst": {
+      "scopes": ["it"],
+      "keys": ["devsecops", "compliance_analysts", "cyber_soc"],
+      "can_ingest": true,
+      "can_intelligence": true,
+      "can_approve": false,
+      "can_dispatch": false,
+      "can_read_audit": false
+    },
+    "noc_lead": {
+      "scopes": ["it"],
+      "keys": ["devops", "networking", "it_engineers", "noc"],
+      "can_ingest": true,
+      "can_intelligence": true,
+      "can_approve": false,
+      "can_dispatch": false,
+      "can_read_audit": false
+    },
+    "noc_engineer": {
+      "scopes": ["it"],
+      "keys": ["devops", "networking", "noc"],
+      "can_ingest": true,
+      "can_intelligence": true,
+      "can_approve": false,
+      "can_dispatch": false,
+      "can_read_audit": false
+    },
+    "devops_lead": {
+      "scopes": ["it"],
+      "keys": ["devops", "networking", "it_engineers", "developers", "change_mgmt"],
+      "can_ingest": true,
+      "can_intelligence": true,
+      "can_approve": false,
+      "can_dispatch": false,
+      "can_read_audit": false
+    },
+    "department_lead": {
+      "scopes": ["department"],
+      "keys": ["finance", "pmo", "hr", "legal", "marketing", "physical_security"],
+      "can_ingest": true,
+      "can_intelligence": true,
+      "can_approve": true,
+      "can_dispatch": false,
+      "can_read_audit": false
+    },
+    "auditor_readonly": {
+      "scopes": ["it", "department"],
+      "keys": ["compliance_analysts", "cyber_soc", "noc", "legal", "finance", "pmo"],
+      "can_ingest": false,
+      "can_intelligence": false,
+      "can_approve": false,
+      "can_dispatch": false,
+      "can_read_audit": true
+    }
+  }
+}

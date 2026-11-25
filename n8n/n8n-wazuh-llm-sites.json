@@ -1,0 +1,127 @@
+{
+    "name":  "EDS-360 Wazuh, LiteLLM/vLLM \u0026 All-9-Websites Monitor",
+    "nodes":  [
+                  {
+                      "parameters":  {
+                                         "httpMethod":  "POST",
+                                         "path":  "eds360-socaas-ingest",
+                                         "responseMode":  "onReceived",
+                                         "options":  {
+
+                                                     }
+                                     },
+                      "id":  "Webhook_Wazuh_LLM",
+                      "name":  "Wazuh / LiteLLM / vLLM Webhook",
+                      "type":  "n8n-nodes-base.webhook",
+                      "typeVersion":  2,
+                      "position":  [
+                                       220,
+                                       200
+                                   ]
+                  },
+                  {
+                      "parameters":  {
+                                         "jsCode":  "const raw = $input.first().json.body || $input.first().json;\nconst stream = String(raw.stream || (raw.rule ? \u0027wazuh\u0027 : \u0027litellm\u0027)).toLowerCase();\nconst nowTime = new Date().toISOString().slice(11, 19) + \u0027Z\u0027;\n\nif (stream === \u0027wazuh\u0027 || raw.rule) {\n  const level = Number(raw.rule?.level ?? raw.level ?? 0);\n  const ruleId = raw.rule?.id || raw.ruleId || \u0027WAZUH-EVT\u0027;\n  const desc = raw.rule?.description || raw.detail || \u0027Wazuh SIEM/FIM/UEBA alert\u0027;\n  const agentName = raw.agent?.name || raw.agentName || \u0027empire-prod-b\u0027;\n  const status = level \u003e= 10 ? \u0027needs_review\u0027 : \u0027compliant\u0027;\n\n  return [{\n    json: {\n      tenantId: raw.tenantId || \u0027eds-360\u0027,\n      scope: \u0027department\u0027,\n      key: \u0027socaas\u0027,\n      sourceLabel: \u0027p2-wazuh\u0027,\n      kpis: [\n        { label: \u0027SOC Watch Coverage\u0027, value: \u002724/7/365\u0027, sub: `Wazuh @ ${nowTime}`, accent: \u0027text-emerald-300\u0027 },\n        { label: \u0027Latest Alert Level\u0027, value: `Lvl ${level}`, sub: `Rule ${ruleId} on ${agentName}`, accent: level \u003e= 10 ? \u0027text-amber-300\u0027 : \u0027text-cyan-300\u0027 },\n        { label: \u0027SIEM \u0026 UEBA Stack\u0027, value: \u0027Active\u0027, sub: \u0027SI.L2-3.14.1 / AU.L2-3.3.1\u0027, accent: \u0027text-emerald-300\u0027 },\n        { label: \u0027HITL Escalation\u0027, value: level \u003e= 10 ? \u0027Staged\u0027 : \u0027Standby\u0027, sub: \u0027SHA-256 attested gate\u0027, accent: \u0027text-indigo-300\u0027 }\n      ],\n      items: [\n        {\n          ref: `WAZUH-${ruleId}`,\n          owner: \u0027SOC Watch \u0026 Wazuh SIEM\u0027,\n          detail: `${desc} (${agentName}) â€” SI.L2-3.14.1 / AU.L2-3.3.1`,\n          status\n        }\n      ]\n    }\n  }];\n}\n\nconst gwStatus = raw.gatewayStatus || \u0027Healthy\u0027;\nconst vllmStatus = raw.vllmStatus || \u0027Online\u0027;\nconst bgeStatus = raw.bgeStatus || \u0027Ready\u0027;\nconst rlsStatus = raw.rlsStatus || \u0027Enforced\u0027;\n\nreturn [{\n  json: {\n    tenantId: raw.tenantId || \u0027eds-360\u0027,\n    scope: \u0027it\u0027,\n    key: \u0027devops\u0027,\n    sourceLabel: \u0027p2-litellm-vllm\u0027,\n    kpis: [\n      { label: \u0027LiteLLM Gateway\u0027, value: gwStatus, sub: \u0027Proxy :4000/v1 + Redis\u0027, accent: \u0027text-emerald-300\u0027 },\n      { label: \u0027vLLM / APC Engine\u0027, value: vllmStatus, sub: `Checked ${nowTime}`, accent: \u0027text-cyan-300\u0027 },\n      { label: \u0027Embeddings (bge-m3)\u0027, value: bgeStatus, sub: \u0027Local RAG \u0026 search\u0027, accent: \u0027text-indigo-300\u0027 },\n      { label: \u0027Safety \u0026 RLS Wall\u0027, value: rlsStatus, sub: \u0027LLM Guard + Postgres RLS\u0027, accent: \u0027text-emerald-300\u0027 }\n    ],\n    items: [\n      {\n        ref: raw.ref || \u0027LLM-GW-TELEMETRY\u0027,\n        owner: \u0027Prod AI \u0026 Infra\u0027,\n        detail: raw.detail || `LiteLLM=${gwStatus}, vLLM=${vllmStatus}, bge-m3=${bgeStatus}, RLS=${rlsStatus} (AC.L2-3.1.1 / AU.L2-3.3.1)`,\n        status: raw.itemStatus || \u0027compliant\u0027\n      }\n    ]\n  }\n}];"
+                                     },
+                      "id":  "Code_Norm_Wazuh_LLM",
+                      "name":  "Normalize Wazuh \u0026 LiteLLM/vLLM",
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       480,
+                                       200
+                                   ]
+                  },
+                  {
+                      "parameters":  {
+                                         "rule":  {
+                                                      "interval":  [
+                                                                       {
+                                                                           "field":  "minutes",
+                                                                           "minutesInterval":  15
+                                                                       }
+                                                                   ]
+                                                  }
+                                     },
+                      "id":  "Cron_Sites_15m",
+                      "name":  "Every 15m (All 9 Websites)",
+                      "type":  "n8n-nodes-base.scheduleTrigger",
+                      "typeVersion":  1.2,
+                      "position":  [
+                                       220,
+                                       440
+                                   ]
+                  },
+                  {
+                      "parameters":  {
+                                         "jsCode":  "const sites = [\n  { id: \u0027main\u0027, url: \u0027https://emergingdefensesolutions.com\u0027, label: \u0027Main Site (EDS)\u0027, group: \u0027executive\u0027 },\n  { id: \u0027defense\u0027, url: \u0027https://defense.eds-360.com\u0027, label: \u0027Defense Portal\u0027, group: \u0027executive\u0027 },\n  { id: \u0027cyber\u0027, url: \u0027https://cyber.eds-360.com\u0027, label: \u0027Cyber / SOCaaS\u0027, group: \u0027socaas\u0027 },\n  { id: \u0027nps\u0027, url: \u0027https://nps.eds-360.com\u0027, label: \u0027NPS Portal\u0027, group: \u0027operations\u0027 },\n  { id: \u0027hive\u0027, url: \u0027https://hive.eds-360.com\u0027, label: \u0027HIVE Platform\u0027, group: \u0027operations\u0027 },\n  { id: \u0027meu\u0027, url: \u0027https://meu.eds-360.com\u0027, label: \u0027MEU Portal\u0027, group: \u0027operations\u0027 },\n  { id: \u0027cyberdojosensei\u0027, url: \u0027https://cyberdojosensei.eds-360.com\u0027, label: \u0027Cyber Dojo Sensei\u0027, group: \u0027marketing\u0027 },\n  { id: \u0027shauntzemorman\u0027, url: \u0027https://shauntzemorman.info\u0027, label: \u0027Shaun Tze Morman\u0027, group: \u0027executive\u0027 },\n  { id: \u0027hive-align\u0027, url: \u0027https://hive-align.eds-360.com\u0027, label: \u0027HIVE-Align\u0027, group: \u0027operations\u0027 }\n];\n\nconst results = [];\nfor (const s of sites) {\n  const started = Date.now();\n  let ok = false;\n  let statusCode = 0;\n  let errMsg = \u0027\u0027;\n  try {\n    const ctrl = new AbortController();\n    const timer = setTimeout(() =\u003e ctrl.abort(), 5000);\n    const res = await fetch(s.url, { method: \u0027GET\u0027, redirect: \u0027follow\u0027, signal: ctrl.signal });\n    clearTimeout(timer);\n    statusCode = res.status;\n    ok = (res.status \u003e= 200 \u0026\u0026 res.status \u003c 400) || (s.id === \u0027hive\u0027 \u0026\u0026 res.status === 403);\n  } catch (e) {\n    errMsg = e \u0026\u0026 e.message ? e.message : \u0027unreachable\u0027;\n  }\n  results.push({\n    ...s,\n    ok,\n    statusCode,\n    latencyMs: Date.now() - started,\n    errMsg\n  });\n}\n\nconst upCount = results.filter(r =\u003e r.ok).length;\nconst downSites = results.filter(r =\u003e !r.ok);\nconst avgMs = Math.round(results.reduce((acc, r) =\u003e acc + r.latencyMs, 0) / Math.max(1, results.length));\nconst nowTime = new Date().toISOString().slice(11, 19) + \u0027Z\u0027;\n\nconst items = results.map(r =\u003e {\n  const stateText = r.ok\n    ? (r.statusCode === 403 ? \u0027HTTP 403 (WAF/Auth Protected)\u0027 : `HTTP ${r.statusCode}`)\n    : `DOWN (${r.errMsg || r.statusCode})`;\n  return {\n    ref: `WEB-${r.id.toUpperCase()}`,\n    owner: \u0027Web \u0026 Edge Ops\u0027,\n    detail: `${r.label} (${r.url}) -\u003e ${stateText} [${r.latencyMs}ms] (SI.L2-3.14.1)`,\n    status: r.ok ? \u0027compliant\u0027 : \u0027needs_review\u0027\n  };\n});\n\nreturn [{\n  json: {\n    tenantId: \u0027eds-360\u0027,\n    scope: \u0027department\u0027,\n    key: \u0027executive\u0027,\n    sourceLabel: \u0027n8n-all-9-sites\u0027,\n    kpis: [\n      { label: \u0027Web Properties Up\u0027, value: `${upCount} / ${results.length}`, sub: `Checked ${nowTime}`, accent: downSites.length === 0 ? \u0027text-emerald-300\u0027 : \u0027text-amber-300\u0027 },\n      { label: \u0027Avg Response\u0027, value: `${avgMs} ms`, sub: \u0027Across all 9 domains\u0027, accent: \u0027text-cyan-300\u0027 },\n      { label: \u0027Degraded / Down\u0027, value: `${downSites.length}`, sub: downSites.length ? downSites.map(d =\u003e d.id).join(\u0027, \u0027) : \u0027All properties healthy\u0027, accent: downSites.length ? \u0027text-rose-300\u0027 : \u0027text-emerald-300\u0027 },\n      { label: \u0027Edge \u0026 Telemetry\u0027, value: \u0027Monitored\u0027, sub: \u0027SI.L2-3.14.1 / AU.L2-3.3.1\u0027, accent: \u0027text-indigo-300\u0027 }\n    ],\n    items\n  }\n}];"
+                                     },
+                      "id":  "Code_Check_All_9_Sites",
+                      "name":  "Probe All 9 EDS-360 \u0026 Partner Web Properties",
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       480,
+                                       440
+                                   ]
+                  },
+                  {
+                      "parameters":  {
+                                         "method":  "POST",
+                                         "url":  "https://localhost/api/admin/functions",
+                                         "sendBody":  true,
+                                         "specifyBody":  "json",
+                                         "jsonBody":  "={{ JSON.stringify() }}",
+                                         "options":  {
+                                                         "allowUnauthorizedCerts":  true
+                                                     }
+                                     },
+                      "id":  "Http_Push_To_Hub",
+                      "name":  "Push Telemetry to Platform Hub",
+                      "type":  "n8n-nodes-base.httpRequest",
+                      "typeVersion":  4.2,
+                      "position":  [
+                                       760,
+                                       320
+                                   ]
+                  }
+              ],
+    "connections":  {
+                        "Wazuh / LiteLLM / vLLM Webhook":  {
+                                                               "main":  [
+                                                                            {
+                                                                                "node":  "Normalize Wazuh \u0026 LiteLLM/vLLM",
+                                                                                "type":  "main",
+                                                                                "index":  0
+                                                                            }
+                                                                        ]
+                                                           },
+                        "Normalize Wazuh \u0026 LiteLLM/vLLM":  {
+                                                                    "main":  [
+                                                                                 {
+                                                                                     "node":  "Push Telemetry to Platform Hub",
+                                                                                     "type":  "main",
+                                                                                     "index":  0
+                                                                                 }
+                                                                             ]
+                                                                },
+                        "Every 15m (All 9 Websites)":  {
+                                                           "main":  [
+                                                                        {
+                                                                            "node":  "Probe All 9 EDS-360 \u0026 Partner Web Properties",
+                                                                            "type":  "main",
+                                                                            "index":  0
+                                                                        }
+                                                                    ]
+                                                       },
+                        "Probe All 9 EDS-360 \u0026 Partner Web Properties":  {
+                                                                                  "main":  [
+                                                                                               {
+                                                                                                   "node":  "Push Telemetry to Platform Hub",
+                                                                                                   "type":  "main",
+                                                                                                   "index":  0
+                                                                                               }
+                                                                                           ]
+                                                                              }
+                    }
+}

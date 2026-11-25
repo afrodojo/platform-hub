@@ -1,0 +1,105 @@
+{
+    "name":  "EDS-360 13 GitHub Repos \u0026 Linked Sites Sync",
+    "nodes":  [
+                  {
+                      "parameters":  {
+                                         "httpMethod":  "POST",
+                                         "path":  "eds360-github-push",
+                                         "responseMode":  "onReceived",
+                                         "options":  {
+
+                                                     }
+                                     },
+                      "id":  "github-push-webhook-trigger",
+                      "name":  "GitHub Push Webhook",
+                      "type":  "n8n-nodes-base.webhook",
+                      "typeVersion":  2,
+                      "position":  [
+                                       200,
+                                       180
+                                   ]
+                  },
+                  {
+                      "parameters":  {
+                                         "rule":  {
+                                                      "interval":  [
+                                                                       {
+                                                                           "field":  "minutes",
+                                                                           "minutesInterval":  30
+                                                                       }
+                                                                   ]
+                                                  }
+                                     },
+                      "id":  "Cron_13Repos_Linked",
+                      "name":  "Every 30m (13 Repos + Linked Sites)",
+                      "type":  "n8n-nodes-base.scheduleTrigger",
+                      "typeVersion":  1.2,
+                      "position":  [
+                                       220,
+                                       300
+                                   ]
+                  },
+                  {
+                      "parameters":  {
+                                         "jsCode":  "// Add or update `url` on any of the 13 repos below to check its associated website\nconst repoTargets = [\n  { id: \u0027main\u0027, label: \u0027Main Site (EDS)\u0027, url: \u0027https://emergingdefensesolutions.com\u0027, owner: \u0027afrodojo\u0027, repo: \u0027emerging-defense-solutions-update\u0027 },\n  { id: \u0027defense\u0027, label: \u0027Defense Training Division\u0027, url: \u0027https://defense.eds-360.com\u0027, owner: \u0027afrodojo\u0027, repo: \u0027eds-defense-training-division\u0027 },\n  { id: \u0027cyber\u0027, label: \u0027Cybersecurity Division\u0027, url: \u0027https://cyber.eds-360.com\u0027, owner: \u0027afrodojo\u0027, repo: \u0027eds-cybersecurity-division\u0027 },\n  { id: \u0027nps\u0027, label: \u0027Notary \u0026 Process Server Division\u0027, url: \u0027https://nps.eds-360.com\u0027, owner: \u0027afrodojo\u0027, repo: \u0027eds-notary-process-server-division\u0027 },\n  { id: \u0027hive\u0027, label: \u0027HIVE Platform\u0027, url: \u0027https://hive.eds-360.com\u0027, owner: \u0027afrodojo\u0027, repo: \u0027hive-eds-360\u0027 },\n  { id: \u0027hive-align\u0027, label: \u0027HIVE Alignment\u0027, url: \u0027https://hive-align.eds-360.com\u0027, owner: \u0027afrodojo\u0027, repo: \u0027hive-alignment\u0027 },\n  { id: \u0027cyberdojo-main\u0027, label: \u0027Cyber Dojo Sensei\u0027, url: \u0027https://cyberdojosensei.eds-360.com\u0027, owner: \u0027afrodojo\u0027, repo: \u0027cyberdojosensei\u0027 },\n  { id: \u0027cyberdojo-alt\u0027, label: \u0027Cyber Dojo Sensei (Alt)\u0027, url: \u0027\u0027, owner: \u0027afrodojo\u0027, repo: \u0027cyber-dojo-sensei\u0027 },\n  { id: \u0027compliance-engine\u0027, label: \u0027EDS-360 Compliance Risk Engine\u0027, url: \u0027\u0027, owner: \u0027EDSSensei2026\u0027, repo: \u0027eds-360-compliance-risk-engine\u0027 },\n  { id: \u0027formal-rag\u0027, label: \u0027EDS Formal RAG\u0027, url: \u0027\u0027, owner: \u0027afrodojo\u0027, repo: \u0027eds-formal-rag\u0027 },\n  { id: \u0027izulu-sentinel\u0027, label: \u0027IzuluSentinel\u0027, url: \u0027\u0027, owner: \u0027afrodojo\u0027, repo: \u0027IzuluSentinel\u0027 },\n  { id: \u0027sensei-phd\u0027, label: \u0027Sensei PhD Research\u0027, url: \u0027\u0027, owner: \u0027afrodojo\u0027, repo: \u0027sensei-phd\u0027 },\n  { id: \u0027hybrid-das-sensei\u0027, label: \u0027AI Lab Hybrid DAS Sensei\u0027, url: \u0027\u0027, owner: \u0027afrodojo\u0027, repo: \u0027AI-Lab-Hybrid-DASSensei\u0027 }\n];\n\nconst ghToken = $env.GITHUB_TOKEN || \u0027\u0027;\nconst headers = {\n  \u0027Accept\u0027: \u0027application/vnd.github+json\u0027,\n  \u0027User-Agent\u0027: \u0027EDS-360-Platform-Hub\u0027\n};\nif (ghToken) headers[\u0027Authorization\u0027] = `Bearer ${ghToken}`;\n\nconst items = [];\nlet failedCiCount = 0;\nlet openAlertsTotal = 0;\nlet healthyRepos = 0;\nlet linkedSitesChecked = 0;\nlet linkedSitesUp = 0;\n\nfor (const t of repoTargets) {\n  let siteSummary = \u0027none-linked\u0027;\n  let siteOk = true;\n\n  if (t.url) {\n    linkedSitesChecked += 1;\n    const t0 = Date.now();\n    let httpCode = 0;\n    try {\n      const ctrl = new AbortController();\n      const timer = setTimeout(() =\u003e ctrl.abort(), 5000);\n      const res = await fetch(t.url, { method: \u0027GET\u0027, redirect: \u0027follow\u0027, signal: ctrl.signal });\n      clearTimeout(timer);\n      httpCode = res.status;\n      siteOk = (res.status \u003e= 200 \u0026\u0026 res.status \u003c 400) || (t.id === \u0027hive\u0027 \u0026\u0026 res.status === 403);\n    } catch (_) {\n      httpCode = 0;\n      siteOk = false;\n    }\n    const ms = Date.now() - t0;\n    if (siteOk) linkedSitesUp += 1;\n    siteSummary = siteOk\n      ? (httpCode === 403 ? `${t.url} -\u003e HTTP 403 (WAF/Auth) [${ms}ms]` : `${t.url} -\u003e HTTP ${httpCode} [${ms}ms]`)\n      : `${t.url} -\u003e DOWN (${httpCode || \u0027ERR\u0027}) [${ms}ms]`;\n  }\n\n  let branch = \u0027main\u0027;\n  let latestSha = \u0027n/a\u0027;\n  let latestMsg = \u0027no commit data\u0027;\n  let ciState = \u0027n/a\u0027;\n  let alertSummary = \u0027alerts:n/a\u0027;\n  let repoOk = false;\n\n  try {\n    const repoRes = await fetch(`https://api.github.com/repos/${t.owner}/${t.repo}`, { headers });\n    if (repoRes.ok) {\n      const repoData = await repoRes.json();\n      branch = repoData.default_branch || \u0027main\u0027;\n    }\n\n    const commitsRes = await fetch(`https://api.github.com/repos/${t.owner}/${t.repo}/commits/${branch}?per_page=1`, { headers });\n    if (commitsRes.ok) {\n      const commits = await commitsRes.json();\n      const c = Array.isArray(commits) ? commits[0] : null;\n      if (c) {\n        repoOk = true;\n        latestSha = (c.sha || \u0027\u0027).slice(0, 7);\n        latestMsg = ((c.commit?.message || \u0027\u0027).split(\u0027\\n\u0027)[0] || \u0027commit\u0027).slice(0, 60);\n      }\n    } else if (commitsRes.status === 404 || commitsRes.status === 409) {\n      latestMsg = `repo/branch status ${commitsRes.status} (private or empty)`;\n    } else if (commitsRes.status === 403) {\n      latestMsg = \u0027rate-limited or private (set GITHUB_TOKEN)\u0027;\n    }\n\n    const runsRes = await fetch(`https://api.github.com/repos/${t.owner}/${t.repo}/actions/runs?branch=${branch}\u0026per_page=1`, { headers });\n    if (runsRes.ok) {\n      const runsData = await runsRes.json();\n      const run = Array.isArray(runsData.workflow_runs) ? runsData.workflow_runs[0] : null;\n      if (run) {\n        ciState = run.conclusion || run.status || \u0027unknown\u0027;\n        if (ciState === \u0027failure\u0027 || ciState === \u0027cancelled\u0027 || ciState === \u0027timed_out\u0027) {\n          failedCiCount += 1;\n          repoOk = false;\n        }\n      } else {\n        ciState = \u0027no-runs\u0027;\n      }\n    }\n\n    const alertsRes = await fetch(`https://api.github.com/repos/${t.owner}/${t.repo}/dependabot/alerts?state=open\u0026per_page=100`, { headers });\n    if (alertsRes.ok) {\n      const alertsList = await alertsRes.json();\n      const count = Array.isArray(alertsList) ? alertsList.length : 0;\n      openAlertsTotal += count;\n      alertSummary = `open-alerts:${count}`;\n      if (count \u003e 0) repoOk = false;\n    } else {\n      alertSummary = \u0027alerts:scope-restricted\u0027;\n    }\n  } catch (err) {\n    latestMsg = `err: ${err.message || \u0027fetch failed\u0027}`.slice(0, 60);\n  }\n\n  if (repoOk) healthyRepos += 1;\n\n  items.push({\n    ref: `REPO-${t.id.toUpperCase()}`,\n    owner: \u0027Eng \u0026 Platform\u0027,\n    detail: `${t.label} [${t.owner}/${t.repo}@${latestSha}] (${latestMsg}) | CI:${ciState} | ${alertSummary} | Site:${siteSummary} (CM.L2-3.4.1 / SI.L2-3.14.1)`,\n    status: siteOk \u0026\u0026 (repoOk || ciState === \u0027no-runs\u0027) ? \u0027compliant\u0027 : \u0027needs_review\u0027\n  });\n}\n\nconst nowTime = new Date().toISOString().slice(11, 19) + \u0027Z\u0027;\n\nreturn [{\n  json: {\n    tenantId: \u0027eds-360\u0027,\n    scope: \u0027it\u0027,\n    key: \u0027devops\u0027,\n    sourceLabel: \u0027n8n-github-13repos-linked-sites\u0027,\n    kpis: [\n      { label: \u0027Repos Monitored\u0027, value: `${healthyRepos} / ${repoTargets.length}`, sub: `Synced ${nowTime}`, accent: \u0027text-cyan-300\u0027 },\n      { label: \u0027Linked Sites Up\u0027, value: `${linkedSitesUp} / ${linkedSitesChecked}`, sub: \u0027Repo-associated endpoints\u0027, accent: linkedSitesUp === linkedSitesChecked ? \u0027text-emerald-300\u0027 : \u0027text-amber-300\u0027 },\n      { label: \u0027CI Failures\u0027, value: `${failedCiCount}`, sub: \u0027Across 13 repos\u0027, accent: failedCiCount === 0 ? \u0027text-emerald-300\u0027 : \u0027text-rose-300\u0027 },\n      { label: \u0027Open Alerts\u0027, value: `${openAlertsTotal}`, sub: \u0027Dependabot / supply-chain\u0027, accent: openAlertsTotal === 0 ? \u0027text-indigo-300\u0027 : \u0027text-amber-300\u0027 }\n    ],\n    items\n  }\n}];"
+                                     },
+                      "id":  "Code_13Repos_Linked",
+                      "name":  "Fetch 13 Repos \u0026 Check Linked Sites",
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       480,
+                                       300
+                                   ]
+                  },
+                  {
+                      "parameters":  {
+                                         "method":  "POST",
+                                         "url":  "https://localhost/api/admin/functions",
+                                         "sendBody":  true,
+                                         "specifyBody":  "json",
+                                         "jsonBody":  "={{ JSON.stringify() }}",
+                                         "options":  {
+                                                         "allowUnauthorizedCerts":  true
+                                                     }
+                                     },
+                      "id":  "Http_Push_13Repos_Linked",
+                      "name":  "Push Repo \u0026 Linked Site Telemetry to Hub",
+                      "type":  "n8n-nodes-base.httpRequest",
+                      "typeVersion":  4.2,
+                      "position":  [
+                                       740,
+                                       300
+                                   ]
+                  }
+              ],
+    "connections":  {
+                        "Every 30m (13 Repos + Linked Sites)":  {
+                                                                    "main":  [
+                                                                                 {
+                                                                                     "node":  "Fetch 13 Repos \u0026 Check Linked Sites",
+                                                                                     "type":  "main",
+                                                                                     "index":  0
+                                                                                 }
+                                                                             ]
+                                                                },
+                        "Fetch 13 Repos \u0026 Check Linked Sites":  {
+                                                                         "main":  [
+                                                                                      {
+                                                                                          "node":  "Push Repo \u0026 Linked Site Telemetry to Hub",
+                                                                                          "type":  "main",
+                                                                                          "index":  0
+                                                                                      }
+                                                                                  ]
+                                                                     },
+                        "GitHub Push Webhook":  {
+                                                    "main":  [
+                                                                 {
+                                                                     "node":  "Every 30m (13 Repos + Linked Sites)",
+                                                                     "type":  "main",
+                                                                     "index":  0
+                                                                 }
+                                                             ]
+                                                }
+                    }
+}

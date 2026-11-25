@@ -1,0 +1,53 @@
+{
+  "name": "EDS-360 24/7 SOCaaS & Infra Telemetry Ingest",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "eds360-socaas-ingest",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "Webhook_Socaas",
+      "name": "SOCaaS / Scan / Infra Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.body || $input.first().json;\nconst stream = String(raw.stream || 'socaas').toLowerCase();\n\nconst mapping = {\n  socaas: { scope: 'department', key: 'socaas', label: 'n8n-24x7-socaas' },\n  vuln: { scope: 'it', key: 'devsecops', label: 'n8n-vuln-scanner' },\n  iam_pam: { scope: 'it', key: 'compliance_analysts', label: 'n8n-iam-pam' },\n  network: { scope: 'it', key: 'networking', label: 'n8n-network-watch' },\n  assets_config: { scope: 'it', key: 'devops', label: 'n8n-assets-config' },\n  cab: { scope: 'it', key: 'change_mgmt', label: 'n8n-cab-rfc' }\n};\n\nconst target = mapping[stream] || mapping.socaas;\n\nreturn [{\n  json: {\n    tenantId: raw.tenantId || 'eds-360',\n    scope: target.scope,\n    key: target.key,\n    sourceLabel: raw.sourceLabel || target.label,\n    kpis: Array.isArray(raw.kpis) ? raw.kpis : [\n      { label: 'Stream Status', value: raw.status || 'Nominal', sub: `Source: ${stream}`, accent: 'text-emerald-300' },\n      { label: 'Open Findings', value: String(raw.openCount ?? 0), sub: 'Auto-triaged by n8n', accent: 'text-cyan-300' },\n      { label: 'Control Mapping', value: raw.controls || 'SI.L2 / AU.L2', sub: 'CMMC / NIST 800-171', accent: 'text-indigo-300' },\n      { label: 'Watch Window', value: '24/7/365', sub: new Date().toISOString().slice(11, 19) + 'Z', accent: 'text-emerald-300' }\n    ],\n    items: Array.isArray(raw.items) && raw.items.length > 0 ? raw.items : [\n      {\n        ref: raw.ref || `EVT-${Date.now().toString().slice(-5)}`,\n        owner: raw.owner || target.label,\n        detail: raw.detail || `${stream.toUpperCase()} telemetry event ingested (${raw.controls || 'SI.L2-3.14.1'})`,\n        status: raw.itemStatus || 'compliant'\n      }\n    ]\n  }\n}];"
+      },
+      "id": "Code_Normalize",
+      "name": "Normalize Telemetry Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hub.eds-360.com/api/admin/functions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "id": "Http_PostHub",
+      "name": "Push to Platform Hub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300]
+    }
+  ],
+  "connections": {
+    "SOCaaS / Scan / Infra Webhook": {
+      "main": [[{ "node": "Normalize Telemetry Payload", "type": "main", "index": 0 }]]
+    },
+    "Normalize Telemetry Payload": {
+      "main": [[{ "node": "Push to Platform Hub", "type": "main", "index": 0 }]]
+    }
+  }
+}

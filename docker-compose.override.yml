@@ -1,0 +1,19 @@
+services:
+  hub-web:
+    environment:
+      - AI_DRAFT_WEBHOOK_URL=http://eds360-hitl-draft:8090/intelligence
+      - FUNCTIONS_STORE_PATH=/data/platform-hub-functions.json
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+    volumes:
+      - hub_web_data:/data
+
+  n8n:
+    volumes:
+      - ./n8n:/files/workflows:ro
+
+  n8n-worker:
+    volumes:
+      - ./n8n:/files/workflows:ro
+
+volumes:
+  hub_web_data:

@@ -1,51 +1,129 @@
-localhost {
+localhost, hub.eds-360.com {
     tls internal
 
-    handle_path /corporate/* {
-        reverse_proxy eds-corporate:3000
+    @allowed_vpn {
+        client_ip 127.0.0.1 ::1 172.18.0.0/16 192.168.65.0/24
     }
 
-    handle_path /api/defense-training/* {
-        reverse_proxy defense-training:3000
+    @from_tunnel {
+        host hub.eds-360.com
     }
 
-    handle_path /api/cyber/* {
-        reverse_proxy cyber-service:3000
+    handle @from_tunnel {
+        handle_path /corporate/* {
+            reverse_proxy eds-corporate:3000
+        }
+
+        handle_path /api/defense-training/* {
+            reverse_proxy defense-training:3000
+        }
+
+        handle_path /api/cyber/* {
+            reverse_proxy cyber-service:3000
+        }
+
+        handle_path /api/training/* {
+            reverse_proxy training-service:3000
+        }
+
+        handle_path /api/notary/* {
+            reverse_proxy notary-service:3000
+        }
+
+        handle_path /api/toc/* {
+            reverse_proxy toc-backend:4000
+        }
+
+        handle_path /api/hive/* {
+            reverse_proxy hive-alignment:8000
+        }
+
+        handle_path /api/unity/* {
+            reverse_proxy morman-unity:3000
+        }
+
+        handle_path /api/rd/* {
+            reverse_proxy rd-lab-java:3000
+        }
+
+        handle_path /api/crypto/* {
+            reverse_proxy core-cpp:8080
+        }
+
+        handle_path /workflows* {
+            reverse_proxy n8n:5678
+        }
+
+        handle /webhook* {
+            reverse_proxy n8n:5678
+        }
+
+        handle /webhook-test* {
+            reverse_proxy n8n:5678
+        }
+
+        handle {
+            reverse_proxy hub-web:3000
+        }
     }
 
-    handle_path /api/training/* {
-        reverse_proxy training-service:3000
+    handle @allowed_vpn {
+        handle_path /corporate/* {
+            reverse_proxy eds-corporate:3000
+        }
+
+        handle_path /api/defense-training/* {
+            reverse_proxy defense-training:3000
+        }
+
+        handle_path /api/cyber/* {
+            reverse_proxy cyber-service:3000
+        }
+
+        handle_path /api/training/* {
+            reverse_proxy training-service:3000
+        }
+
+        handle_path /api/notary/* {
+            reverse_proxy notary-service:3000
+        }
+
+        handle_path /api/toc/* {
+            reverse_proxy toc-backend:4000
+        }
+
+        handle_path /api/hive/* {
+            reverse_proxy hive-alignment:8000
+        }
+
+        handle_path /api/unity/* {
+            reverse_proxy morman-unity:3000
+        }
+
+        handle_path /api/rd/* {
+            reverse_proxy rd-lab-java:3000
+        }
+
+        handle_path /api/crypto/* {
+            reverse_proxy core-cpp:8080
+        }
+
+        handle_path /workflows* {
+            reverse_proxy n8n:5678
+        }
+
+        handle /webhook* {
+            reverse_proxy n8n:5678
+        }
+
+        handle /webhook-test* {
+            reverse_proxy n8n:5678
+        }
+
+        handle {
+            reverse_proxy hub-web:3000
+        }
     }
 
-    handle_path /api/notary/* {
-        reverse_proxy notary-service:3000
-    }
-
-    handle_path /api/toc/* {
-        reverse_proxy toc-backend:4000
-    }
-
-    handle_path /api/hive/* {
-        reverse_proxy hive-alignment:8000
-    }
-
-    handle_path /api/unity/* {
-        reverse_proxy morman-unity:3000
-    }
-
-    handle_path /api/rd/* {
-        reverse_proxy rd-lab-java:3000
-    }
-    handle_path /api/crypto/* {
-        reverse_proxy core-cpp:8080
-    }
-
-
-    handle_path /workflows* {
-        reverse_proxy n8n:5678
-    }
-
-    handle {
-        reverse_proxy hub-web:3000
-    }
+    respond "Forbidden: Authorized tunnel or VPN required" 403
 }
