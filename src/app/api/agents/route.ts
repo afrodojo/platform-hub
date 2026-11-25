@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { pool } from '@/lib/db';
+import { verifyRotatingCode } from '@/lib/rotatingCode';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +13,8 @@ const ALLOWED_DOMAINS = new Set([
   'infra',
   'operations',
 ]);
+
+const HIGH_RISK_DOMAINS = new Set(['subscriptions', 'infra']);
 
 const DOMAIN_AGENT_MAP: Record<string, { name: string; role: string; defaultAction: string }> = {
   subscriptions: {
@@ -71,6 +74,7 @@ export async function GET(req: NextRequest) {
       `SELECT id, run_uuid, org_id, intake_id, domain_category, agent_name, agent_role,
               trigger_source, model_name, input_sha256, output_sha256,
               proposed_actions, payload_preview, confidence_score,
+              requires_step_up_code, step_up_verified_at,
               approval_status, approved_by, approved_at, execution_status, created_at
        FROM agent_audit_runs
        ${whereClause}
@@ -90,7 +94,6 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // Mode 1: Stage a new HITL draft for subscriptions, seo, marketing, social, or infra
     if (body.action === 'stage_draft') {
       const rawDomain = typeof body.domainCategory === 'string' ? body.domainCategory.trim().toLowerCase() : 'operations';
       const domainCategory = ALLOWED_DOMAINS.has(rawDomain) ? rawDomain : 'operations';
@@ -103,6 +106,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Draft title and content are required.' }, { status: 400 });
       }
 
+      const requiresStepUpCode = HIGH_RISK_DOMAINS.has(domainCategory) || Boolean(body.requiresStepUpCode);
       const meta = DOMAIN_AGENT_MAP[domainCategory] || DOMAIN_AGENT_MAP.operations;
       const previewObj = {
         title,
@@ -110,8 +114,14 @@ export async function POST(req: NextRequest) {
         summary: draftBody,
         stagedAt: new Date().toISOString(),
       };
-      const inputSha256 = crypto.createHash('sha256').update(JSON.stringify({ domainCategory, title, draftBody })).digest('hex');
-      const outputSha256 = crypto.createHash('sha256').update(JSON.stringify(previewObj)).digest('hex');
+      const inputSha256 = crypto
+        .createHash('sha256')
+        .update(JSON.stringify({ domainCategory, title, draftBody }))
+        .digest('hex');
+      const outputSha256 = crypto
+        .createHash('sha256')
+        .update(JSON.stringify(previewObj))
+        .digest('hex');
       const proposedActions = [
         {
           action: meta.defaultAction,
@@ -124,12 +134,13 @@ export async function POST(req: NextRequest) {
         `INSERT INTO agent_audit_runs (
            org_id, domain_category, agent_name, agent_role, trigger_source, model_name,
            input_sha256, output_sha256, tool_calls, proposed_actions, payload_preview,
-           confidence_score, approval_status, execution_status
+           confidence_score, requires_step_up_code, approval_status, execution_status
          )
-         VALUES ($1, $2, $3, $4, 'founder_hitl_draft', 'hitl-drafter-v1', $5, $6, '[]'::jsonb, $7::jsonb, $8::jsonb, 0.920, 'pending_approval', 'staged_for_review')
+         VALUES ($1, $2, $3, $4, 'founder_hitl_draft', 'hitl-drafter-v1', $5, $6, '[]'::jsonb, $7::jsonb, $8::jsonb, 0.920, $9, 'pending_approval', 'staged_for_review')
          RETURNING id, run_uuid, org_id, intake_id, domain_category, agent_name, agent_role,
                    trigger_source, model_name, input_sha256, output_sha256,
                    proposed_actions, payload_preview, confidence_score,
+                   requires_step_up_code, step_up_verified_at,
                    approval_status, approved_by, approved_at, execution_status, created_at`,
         [
           orgId,
@@ -140,16 +151,38 @@ export async function POST(req: NextRequest) {
           outputSha256,
           JSON.stringify(proposedActions),
           JSON.stringify(previewObj),
+          requiresStepUpCode,
         ]
       );
 
       return NextResponse.json({ ok: true, run: inserted.rows[0] }, { status: 201 });
     }
 
-    // Mode 2: Human-in-the-loop approval or rejection decision
-    const { runId, decision, reviewer } = body;
+    const { runId, decision, reviewer, rotatingCode } = body;
     if (!runId || (decision !== 'approved' && decision !== 'rejected')) {
       return NextResponse.json({ error: 'Valid runId and decision (approved|rejected) required.' }, { status: 400 });
+    }
+
+    const existingRes = await pool.query(
+      `SELECT id, domain_category, requires_step_up_code FROM agent_audit_runs WHERE id = $1 LIMIT 1`,
+      [runId]
+    );
+
+    if (existingRes.rows.length === 0) {
+      return NextResponse.json({ error: 'Agent run not found.' }, { status: 404 });
+    }
+
+    const targetRun = existingRes.rows[0];
+    const needsStepUp =
+      decision === 'approved' &&
+      (Boolean(targetRun.requires_step_up_code) ||
+        HIGH_RISK_DOMAINS.has(String(targetRun.domain_category || '').toLowerCase()));
+
+    if (needsStepUp && !verifyRotatingCode(rotatingCode)) {
+      return NextResponse.json(
+        { error: 'Valid 6-digit rotating code required to approve high-risk actions.' },
+        { status: 401 }
+      );
     }
 
     const nextExecStatus = decision === 'approved' ? 'approved_for_execution' : 'blocked_by_reviewer';
@@ -159,18 +192,22 @@ export async function POST(req: NextRequest) {
            execution_status = $2,
            approved_by = $3,
            approved_at = NOW(),
+           step_up_verified_at = CASE WHEN $4 THEN NOW() ELSE step_up_verified_at END,
            updated_at = NOW()
-       WHERE id = $4
+       WHERE id = $5
        RETURNING id, run_uuid, org_id, intake_id, domain_category, agent_name, agent_role,
                  trigger_source, model_name, input_sha256, output_sha256,
                  proposed_actions, payload_preview, confidence_score,
+                 requires_step_up_code, step_up_verified_at,
                  approval_status, approved_by, approved_at, execution_status, created_at`,
-      [decision, nextExecStatus, typeof reviewer === 'string' && reviewer.trim() ? reviewer.trim() : 'Founder (HITL)', runId]
+      [
+        decision,
+        nextExecStatus,
+        typeof reviewer === 'string' && reviewer.trim() ? reviewer.trim() : 'Founder (HITL)',
+        needsStepUp,
+        runId,
+      ]
     );
-
-    if (updated.rows.length === 0) {
-      return NextResponse.json({ error: 'Agent run not found.' }, { status: 404 });
-    }
 
     return NextResponse.json({ ok: true, run: updated.rows[0] });
   } catch (err) {

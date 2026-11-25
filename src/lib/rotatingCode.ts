@@ -28,8 +28,7 @@ export function generateRotatingCode(offsetSteps = 0, windowSeconds = 60): strin
 }
 
 /**
- * Verifies a 6-digit rotating code across the current window and +/- 1 adjacent window
- * to tolerate clock/network drift while rejecting stale or invalid codes.
+ * Verifies a 6-digit rotating code across the current window and +/- 1 adjacent window.
  */
 export function verifyRotatingCode(candidate: string, windowSeconds = 60): boolean {
   const normalized = (candidate || '').trim();
